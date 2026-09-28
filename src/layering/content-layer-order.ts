@@ -1,0 +1,149 @@
+/**
+ * @file content-layer-order.ts
+ * @description 场景树内容层拓扑排序算法 (ContentLayerOrder)
+ * 
+ * 核心设计考量 (Why):
+ * 1. 伴生锚定法则 (Anchor Node Hierarchy)：
+ *    连线不设死板独立的全局孤立层，而是跟随其连接的两端节点中层级更高者伴生锚定；
+ * 2. 紧贴下层法则 (Immediately Below Rule)：
+ *    连线与伴生节点在同一层级时，连线严格排在节点紧下方 (-1)，彻底杜绝连线穿透盖住卡片与文字；
+ * 3. 容器与跨画框自适应：
+ *    画框内连线天然高于画框底色、低于子节点；跨画框连线天然高于低层画框底色、在目标节点处自然隐入。
+ */
+
+import type { ConnectorEntity, NodeEntity } from '@skynote/core';
+
+export type ContentLayerOrderEntry =
+  | { kind: 'node'; node: NodeEntity; stableOrder: number }
+  | {
+      kind: 'connector';
+      connector: ConnectorEntity;
+      anchorNode: NodeEntity | null;
+      stableOrder: number;
+    };
+
+/**
+ * 求解节点自根向下的继承祖先链
+ */
+export function resolveNodeAncestryChain(
+  node: NodeEntity,
+  getNode: (id: string) => NodeEntity | undefined
+): NodeEntity[] {
+  const result: NodeEntity[] = [node];
+  let current = node;
+  const visited = new Set<string>([node.id]);
+
+  while (current.parentId) {
+    if (visited.has(current.parentId)) break; // 防止环状依赖
+    visited.add(current.parentId);
+    const parent = getNode(current.parentId);
+    if (!parent) break;
+    result.push(parent);
+    current = parent;
+  }
+
+  return result.reverse();
+}
+
+/**
+ * 基于画框树状层级比较两个节点的前后顺序
+ * 规则：
+ * 1. 祖先节点永远排在子孙节点下方 (父背景在底，子节点在顶)；
+ * 2. 同级分叉点按 zIndex 升序比较。
+ */
+export function compareHierarchicalNodes(
+  left: NodeEntity,
+  right: NodeEntity,
+  getNode: (id: string) => NodeEntity | undefined,
+  chainCache?: Map<string, NodeEntity[]>
+): number {
+  if (left.id === right.id) return 0;
+
+  const getChain = (node: NodeEntity): NodeEntity[] => {
+    if (chainCache?.has(node.id)) return chainCache.get(node.id)!;
+    const chain = resolveNodeAncestryChain(node, getNode);
+    chainCache?.set(node.id, chain);
+    return chain;
+  };
+
+  const leftChain = getChain(left);
+  const rightChain = getChain(right);
+
+  let index = 0;
+  while (
+    index < leftChain.length &&
+    index < rightChain.length &&
+    leftChain[index].id === rightChain[index].id
+  ) {
+    index += 1;
+  }
+
+  // left 是 right 的祖先容器：left 更低
+  if (index === leftChain.length) return -1;
+  // right 是 left 的祖先容器：right 更低，left 更高
+  if (index === rightChain.length) return 1;
+
+  // 相同深度的第一个分叉点，按 zIndex 判定
+  const diff = leftChain[index].zIndex - rightChain[index].zIndex;
+  if (diff !== 0) return diff;
+
+  return 0;
+}
+
+/**
+ * 求解连线的伴生锚定节点 (选取两端中层级更高者)
+ */
+export function resolveConnectorLayerAnchor(
+  connector: Pick<ConnectorEntity, 'from' | 'to'>,
+  getNode: (nodeId?: string) => NodeEntity | undefined,
+  compareNodes: (left: NodeEntity, right: NodeEntity) => number
+): NodeEntity | null {
+  const fromNode = connector.from.nodeId ? getNode(connector.from.nodeId) : undefined;
+  const toNode = connector.to.nodeId ? getNode(connector.to.nodeId) : undefined;
+
+  if (!fromNode) return toNode ?? null;
+  if (!toNode) return fromNode;
+
+  return compareNodes(fromNode, toNode) >= 0 ? fromNode : toNode;
+}
+
+/**
+ * 内容层统一拓扑排序比较器
+ */
+export function compareContentLayerEntries(
+  left: ContentLayerOrderEntry,
+  right: ContentLayerOrderEntry,
+  compareNodes: (left: NodeEntity, right: NodeEntity) => number
+): number {
+  const leftAnchor = left.kind === 'node' ? left.node : left.anchorNode;
+  const rightAnchor = right.kind === 'node' ? right.node : right.anchorNode;
+
+  let order = 0;
+  if (leftAnchor && rightAnchor) {
+    order = compareNodes(leftAnchor, rightAnchor);
+  } else {
+    const leftZ =
+      leftAnchor?.zIndex ??
+      (left.kind === 'connector' ? left.connector.zIndex : left.node.zIndex);
+    const rightZ =
+      rightAnchor?.zIndex ??
+      (right.kind === 'connector' ? right.connector.zIndex : right.node.zIndex);
+    order = leftZ - rightZ;
+  }
+
+  if (order !== 0) return order;
+
+  // 伴生锚点相同时：连线永远排在节点紧下方 (-1)
+  if (left.kind !== right.kind) {
+    return left.kind === 'connector' ? -1 : 1;
+  }
+
+  // 均为连线时按连线自身 zIndex 比较
+  if (left.kind === 'connector' && right.kind === 'connector') {
+    const connectorOrder = left.connector.zIndex - right.connector.zIndex;
+    if (connectorOrder !== 0) return connectorOrder;
+  }
+
+  // 保持稳定输入次序
+  return left.stableOrder - right.stableOrder;
+}

@@ -21,7 +21,9 @@ import type {
   CanvasPrimitive,
   RectBounds,
   NodeFill,
-  CanvasWheelEvent
+  CanvasWheelEvent,
+  RuntimeNode,
+  RuntimeConnector
 } from '@skynote/core';
 import type {
   LeaferRendererOptions,
@@ -45,6 +47,12 @@ import { LeaferNodeRendererRegistry } from './registry/leafer-node-renderer-regi
 import { LeaferConnectorRendererRegistry } from './registry/leafer-connector-renderer-registry';
 import { FrameCommitScheduler } from './scheduler/frame-commit-scheduler';
 import { AdaptiveLodController, type SkyNoteLodLevel } from './scheduler/adaptive-lod';
+import {
+  compareHierarchicalNodes,
+  resolveConnectorLayerAnchor,
+  compareContentLayerEntries,
+  type ContentLayerOrderEntry
+} from './layering/content-layer-order';
 
 function resolveSolidFill(fill?: NodeFill): string {
   if (!fill) return '#FFFFFF';
@@ -60,8 +68,7 @@ export class LeaferRenderer {
   private container: HTMLElement | null = null;
   private leaferApp: Leafer | null = null;
   private sceneGroup: Group | null = null;
-  private nodesLayer: Group | null = null;
-  private connectorsLayer: Group | null = null;
+  private contentLayer: Group | null = null;
   private ephemeralGroup: Group | null = null;
   private hostBridge: DOMHostBridge | null = null;
 
@@ -125,19 +132,17 @@ export class LeaferRenderer {
       pixelRatio: this.dpr
     });
 
-    // 2. 建立场景树分层结构
+    // 2. 建立场景树分层结构 (统一内容层 contentLayer 与瞬态交互层 ephemeralGroup)
     this.sceneGroup = new Group({
       x: this.viewport.x,
       y: this.viewport.y,
       scaleX: this.viewport.zoom,
       scaleY: this.viewport.zoom
     });
-    this.connectorsLayer = new Group();
-    this.nodesLayer = new Group();
+    this.contentLayer = new Group();
     this.ephemeralGroup = new Group();
 
-    this.sceneGroup.add(this.connectorsLayer);
-    this.sceneGroup.add(this.nodesLayer);
+    this.sceneGroup.add(this.contentLayer);
     this.sceneGroup.add(this.ephemeralGroup);
     this.leaferApp.add(this.sceneGroup);
 
@@ -232,7 +237,7 @@ export class LeaferRenderer {
    * 核心渲染帧执行函数 (视锥剔除 + 双版本号局部更新 + 自适应 LOD 与分帧调度)
    */
   renderFrame(): void {
-    if (this.isDestroyed || !this.sceneGroup || !this.nodesLayer || !this.connectorsLayer) return;
+    if (this.isDestroyed || !this.sceneGroup || !this.contentLayer) return;
 
     const frameStartTime = performance.now();
     const containerWidth = this.container?.clientWidth || 800;
@@ -361,7 +366,7 @@ export class LeaferRenderer {
       const fromNode = fromRuntime?.entity;
       const toNode = toRuntime?.entity;
 
-      const updated = renderConnector(this.connectorsLayer, {
+      const updated = renderConnector(this.contentLayer, {
         connector,
         geomVersion: runtimeConnector.runtime.geomVersion,
         dataVersion: runtimeConnector.runtime.dataVersion,
@@ -390,11 +395,14 @@ export class LeaferRenderer {
       }
     }
 
-    // 8. 闭环记录帧耗时度量
+    // 8. 拓扑同步图元层级（伴生锚定与父子关系）
+    this.syncContentOrder(allNodes, allConnectors);
+
+    // 9. 闭环记录帧耗时度量
     const frameDuration = performance.now() - frameStartTime;
     this.lodController.recordFrame(frameDuration, frameStartTime);
 
-    // 9. 若分帧队列中尚有未提交的节点，自动调度下一帧 requestAnimationFrame
+    // 10. 若分帧队列中尚有未提交的节点，自动调度下一帧 requestAnimationFrame
     if (frameResult.state.active && typeof requestAnimationFrame !== 'undefined') {
       if (this.scheduledRafId === null) {
         this.scheduledRafId = requestAnimationFrame(() => {
@@ -415,7 +423,7 @@ export class LeaferRenderer {
     cache: NodeRenderCache | undefined,
     context: LeaferRenderContext
   ): void {
-    if (!this.nodesLayer) return;
+    if (!this.contentLayer) return;
 
     // 存在缓存，优先检查几何版本号 (geomVersion)
     if (cache) {
@@ -451,7 +459,7 @@ export class LeaferRenderer {
     });
     const contentGroup = new Group();
     outerGroup.add(contentGroup);
-    this.nodesLayer.add(outerGroup);
+    this.contentLayer.add(outerGroup);
 
     const newCache: NodeRenderCache = {
       outerGroup,
@@ -516,6 +524,85 @@ export class LeaferRenderer {
       primitives,
       this.dpr
     );
+  }
+
+  /**
+   * 拓扑同步图元层级（伴生锚定与父子关系）
+   * 规则：
+   * 1. 伴生锚定：连线跟随两端层级较高者伴生；
+   * 2. 紧贴下层：同伴生节点时连线严格排在节点紧下方 (-1)；
+   * 3. 极速跳过：当层叠顺序完全一致时 0 树操作跳过。
+   */
+  private syncContentOrder(
+    allNodes: readonly RuntimeNode[],
+    allConnectors: readonly RuntimeConnector[]
+  ): void {
+    if (!this.contentLayer) return;
+
+    const chainCache = new Map<string, NodeEntity[]>();
+    const nodeLookup = new Map<string, NodeEntity>();
+    for (let i = 0; i < allNodes.length; i++) {
+      nodeLookup.set(allNodes[i].entity.id, allNodes[i].entity);
+    }
+    const getNode = (id?: string) => (id ? nodeLookup.get(id) : undefined);
+
+    const compareNodes = (left: NodeEntity, right: NodeEntity) =>
+      compareHierarchicalNodes(left, right, getNode, chainCache);
+
+    const ordered: Array<{ entry: ContentLayerOrderEntry; group: Group }> = [];
+
+    // 收集所有可见节点的 outerGroup
+    for (let i = 0; i < allNodes.length; i++) {
+      const node = allNodes[i].entity;
+      const cache = this.nodeCaches.get(node.id);
+      if (cache && cache.outerGroup.parent === this.contentLayer && cache.outerGroup.visible) {
+        ordered.push({
+          entry: { kind: 'node', node, stableOrder: i },
+          group: cache.outerGroup
+        });
+      }
+    }
+
+    // 收集所有可见连线的 group
+    for (let i = 0; i < allConnectors.length; i++) {
+      const connector = allConnectors[i].entity;
+      const cache = this.connectorCaches.get(connector.id);
+      if (cache && cache.group.parent === this.contentLayer && cache.group.visible) {
+        ordered.push({
+          entry: {
+            kind: 'connector',
+            connector,
+            anchorNode: resolveConnectorLayerAnchor(connector, getNode, compareNodes),
+            stableOrder: i
+          },
+          group: cache.group
+        });
+      }
+    }
+
+    ordered.sort((left, right) =>
+      compareContentLayerEntries(left.entry, right.entry, compareNodes)
+    );
+
+    // 快速脏检查：仅当顺序与 contentLayer.children 当前顺序不一致时才重新挂载
+    const currentChildren = this.contentLayer.children;
+    let needReorder = false;
+    if (currentChildren.length !== ordered.length) {
+      needReorder = true;
+    } else {
+      for (let i = 0; i < ordered.length; i++) {
+        if (currentChildren[i] !== ordered[i].group) {
+          needReorder = true;
+          break;
+        }
+      }
+    }
+
+    if (needReorder) {
+      for (let i = 0; i < ordered.length; i++) {
+        this.contentLayer.add(ordered[i].group);
+      }
+    }
   }
 
   /**
@@ -701,6 +788,11 @@ export class LeaferRenderer {
     this.connectorCaches.clear();
     this.nodeRenderers.clear();
     this.connectorRenderers.clear();
+
+    if (this.contentLayer) {
+      this.contentLayer.clear();
+      this.contentLayer = null;
+    }
 
     if (this.leaferApp) {
       this.leaferApp.destroy();
