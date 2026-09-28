@@ -1,0 +1,83 @@
+/**
+ * @file types.ts
+ * @description LeaferJS 渲染适配器类型定义
+ * 
+ * 遵守 AGENTS.md 准则：
+ * 1. 单一事实源：杜绝能在已有字段推导出的冗余属性 (如 zoom)；
+ * 2. 干净纯粹：严禁未被实际使用的幽灵字段 (如 lifecycleCustomData)。
+ */
+
+import type {
+  NodeEntity,
+  ConnectorEntity,
+  Point,
+  CanvasPatch
+} from '@skynote/core';
+import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
+import type { ViewportState } from './viewport/viewport-transform';
+
+/** Leafer 支持的基础形状联合 */
+export type LeaferShape = Group | Rect | Ellipse | Polygon | Path | Line | Text | Box | Image;
+
+/** 视口与渲染交互上下文 (遵守单一事实源，zoom 直接通过 viewport.zoom 读取) */
+export interface LeaferRenderContext {
+  readonly viewport: ViewportState;
+  readonly isInteracting: boolean;
+  readonly selectedNodeIds: ReadonlySet<string>;
+  readonly selectedConnectorIds: ReadonlySet<string>;
+}
+
+/** 渲染器构造选项 */
+export interface LeaferRendererOptions {
+  /** 挂载的 DOM 容器 */
+  container?: HTMLElement;
+  /** 设备像素比 (默认自动读取 window.devicePixelRatio) */
+  dpr?: number;
+  /** 初始视口 */
+  initialViewport?: ViewportState;
+  /** 帧调度配置 (默认 true) */
+  enableFrameScheduler?: boolean;
+}
+
+/** 节点渲染图元缓存项 */
+export interface NodeRenderCache {
+  readonly outerGroup: Group;
+  readonly contentGroup: Group;
+  /** 最近一次成功渲染的几何版本号 */
+  geomVersion: number;
+  /** 最近一次成功渲染的业务数据版本号 */
+  dataVersion: number;
+  /** 内部创建的 Leafer 图元引用列表 (用于就地复用) */
+  shapes: LeaferShape[];
+  /** 节点类型标识 (用于卸载时寻址专属原生渲染器) */
+  nodeType?: string;
+}
+
+/** 连线渲染图元缓存项 */
+export interface ConnectorRenderCache {
+  readonly group: Group;
+  readonly lineShape: Line | Path;
+  startMarkerShape?: LeaferShape;
+  endMarkerShape?: LeaferShape;
+  /** 最近一次渲染时的连线几何版本号 */
+  geomVersion: number;
+  /** 最近一次渲染时的连线业务数据版本号 */
+  dataVersion: number;
+  /** 关联两端节点几何版本签名 (nodeFromGeomVersion:nodeToGeomVersion) */
+  endpointsSignature: string;
+  /** 算好的折线/路径缓存 (供 hitTestConnector 碰撞计算) */
+  computedPoints?: Point[];
+  /** 连线类型标识 */
+  connectorType?: string;
+}
+
+/** 顶层瞬态图元渲染会话 */
+export interface EphemeralSession {
+  readonly sessionId: string;
+  shapes: LeaferShape[];
+}
+
+/** 实体碰撞拾取统一命中结果 */
+export type HitEntityResult =
+  | { readonly type: 'node'; readonly entity: NodeEntity }
+  | { readonly type: 'connector'; readonly entity: ConnectorEntity };

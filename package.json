@@ -12,8 +12,19 @@
       "import": "./src/index.ts"
     }
   },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
-    "@skynote/core": "workspace:*"
+    "@skynote/core": "workspace:*",
+    "@leafer/core": "2.1.4",
+    "leafer": "2.1.4"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
   },
   "publishConfig": {
     "access": "public"
