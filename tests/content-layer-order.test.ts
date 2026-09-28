@@ -125,15 +125,16 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
 
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardB, stableOrder: 0 },
+      { kind: 'node', node: cardB, group: null, stableOrder: 0 },
       {
         kind: 'connector',
         connector: innerConn,
+        group: null,
         anchorNode: resolveConnectorLayerAnchor(innerConn, getNode, compareNodes),
         stableOrder: 1
       },
-      { kind: 'node', node: frame, stableOrder: 2 },
-      { kind: 'node', node: cardA, stableOrder: 3 }
+      { kind: 'node', node: frame, group: null, stableOrder: 2 },
+      { kind: 'node', node: cardA, group: null, stableOrder: 3 }
     ];
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
@@ -162,16 +163,17 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
 
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardInB, stableOrder: 0 },
-      { kind: 'node', node: frameB, stableOrder: 1 },
+      { kind: 'node', node: cardInB, group: null, stableOrder: 0 },
+      { kind: 'node', node: frameB, group: null, stableOrder: 1 },
       {
         kind: 'connector',
         connector: crossConn,
+        group: null,
         anchorNode: resolveConnectorLayerAnchor(crossConn, getNode, compareNodes),
         stableOrder: 2
       },
-      { kind: 'node', node: cardInA, stableOrder: 3 },
-      { kind: 'node', node: frameA, stableOrder: 4 }
+      { kind: 'node', node: cardInA, group: null, stableOrder: 3 },
+      { kind: 'node', node: frameA, group: null, stableOrder: 4 }
     ];
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
@@ -179,5 +181,39 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     const resultIds = entries.map(e => e.kind === 'node' ? e.node.id : e.connector.id);
     // frameA -> cardInA -> frameB -> crossConn (在 cardInB 紧下方) -> cardInB
     expect(resultIds).toEqual(['frameA', 'cardInA', 'frameB', 'crossConn', 'cardInB']);
+  });
+
+  it('严格弱序传递性：同分兄弟节点与伴生连线不产生逆序错位', () => {
+    // 兄弟卡片 A 与 B (zIndex 均为 1，且同属于 root)
+    const cardA = createMockNode({ id: 'cardA', zIndex: 1 });
+    const cardB = createMockNode({ id: 'cardB', zIndex: 1 });
+    // 连线 connB 伴随 cardB
+    const connB = createMockConnector({ id: 'connB', fromId: 'cardB', zIndex: 1 });
+
+    const nodes = new Map<string, NodeEntity>([
+      ['cardA', cardA],
+      ['cardB', cardB]
+    ]);
+    const getNode = (id?: string) => (id ? nodes.get(id) : undefined);
+    const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
+
+    // 输入顺序：cardA (0) -> connB (1) -> cardB (2)
+    const entries: ContentLayerOrderEntry[] = [
+      { kind: 'node', node: cardB, group: null, stableOrder: 2 },
+      {
+        kind: 'connector',
+        connector: connB,
+        group: null,
+        anchorNode: cardB,
+        stableOrder: 1
+      },
+      { kind: 'node', node: cardA, group: null, stableOrder: 0 }
+    ];
+
+    entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
+
+    const resultIds = entries.map(e => e.kind === 'node' ? e.node.id : e.connector.id);
+    // 严格满足：cardA -> connB (紧贴 cardB 下方) -> cardB
+    expect(resultIds).toEqual(['cardA', 'connB', 'cardB']);
   });
 });

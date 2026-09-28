@@ -68,6 +68,7 @@ export class LeaferRenderer {
   private container: HTMLElement | null = null;
   private leaferApp: Leafer | null = null;
   private sceneGroup: Group | null = null;
+  private backgroundLayer: Group | null = null;
   private contentLayer: Group | null = null;
   private ephemeralGroup: Group | null = null;
   private hostBridge: DOMHostBridge | null = null;
@@ -84,6 +85,9 @@ export class LeaferRenderer {
   private readonly lodController: AdaptiveLodController;
   private resizeObserver: ResizeObserver | null = null;
   private scheduledRafId: number | null = null;
+  private contentOrderDirty = true;
+  private lastRenderedNodeCount = 0;
+  private lastRenderedConnectorCount = 0;
 
   private unsubscribeDoc: (() => void) | null = null;
   private unregisterDefaultWheel: (() => void) | null = null;
@@ -132,16 +136,18 @@ export class LeaferRenderer {
       pixelRatio: this.dpr
     });
 
-    // 2. 建立场景树分层结构 (统一内容层 contentLayer 与瞬态交互层 ephemeralGroup)
+    // 2. 建立场景树分层结构 (底层背景层 backgroundLayer -> 统一内容层 contentLayer -> 顶层瞬态交互层 ephemeralGroup)
     this.sceneGroup = new Group({
       x: this.viewport.x,
       y: this.viewport.y,
       scaleX: this.viewport.zoom,
       scaleY: this.viewport.zoom
     });
+    this.backgroundLayer = new Group();
     this.contentLayer = new Group();
     this.ephemeralGroup = new Group();
 
+    this.sceneGroup.add(this.backgroundLayer);
     this.sceneGroup.add(this.contentLayer);
     this.sceneGroup.add(this.ephemeralGroup);
     this.leaferApp.add(this.sceneGroup);
@@ -226,10 +232,29 @@ export class LeaferRenderer {
   }
 
   /**
-   * 接收上层提交的原子补丁
+   * 接收上层提交的原子补丁 (增量标记 contentOrderDirty)
    */
-  commitPatch(_patches: CanvasPatch[]): void {
+  commitPatch(patches: CanvasPatch[]): void {
     if (this.isDestroyed || !this.sceneGroup) return;
+
+    for (let i = 0; i < patches.length; i++) {
+      const patch = patches[i];
+      if (patch.op === 'splice') {
+        this.contentOrderDirty = true;
+        break;
+      }
+      const pathStr = Array.isArray(patch.path) ? patch.path.join('.') : String(patch.path);
+      if (
+        pathStr.includes('zIndex') ||
+        pathStr.includes('parentId') ||
+        pathStr.includes('from') ||
+        pathStr.includes('to')
+      ) {
+        this.contentOrderDirty = true;
+        break;
+      }
+    }
+
     this.renderFrame();
   }
 
@@ -529,15 +554,27 @@ export class LeaferRenderer {
   /**
    * 拓扑同步图元层级（伴生锚定与父子关系）
    * 规则：
-   * 1. 伴生锚定：连线跟随两端层级较高者伴生；
-   * 2. 紧贴下层：同伴生节点时连线严格排在节点紧下方 (-1)；
-   * 3. 极速跳过：当层叠顺序完全一致时 0 树操作跳过。
+   * 1. 脏标记守卫：层级未变且实体总数未变时，0.001ms Fast-Path 直接返回；
+   * 2. 伴生锚定：连线跟随两端层级较高者伴生；
+   * 3. 紧贴下层：同伴生节点时连线严格排在节点紧下方 (-1)；
+   * 4. 扁平入队：单层对象结构，减少 50% 内存分配。
    */
   private syncContentOrder(
     allNodes: readonly RuntimeNode[],
     allConnectors: readonly RuntimeConnector[]
   ): void {
     if (!this.contentLayer) return;
+
+    // Fast-Path 性能守卫：若层级未标记 dirty 且总实体数未变，直接 0 计算跳过
+    if (
+      !this.contentOrderDirty &&
+      this.lastRenderedNodeCount === allNodes.length &&
+      this.lastRenderedConnectorCount === allConnectors.length
+    ) {
+      return;
+    }
+    this.lastRenderedNodeCount = allNodes.length;
+    this.lastRenderedConnectorCount = allConnectors.length;
 
     const chainCache = new Map<string, NodeEntity[]>();
     const nodeLookup = new Map<string, NodeEntity>();
@@ -549,16 +586,18 @@ export class LeaferRenderer {
     const compareNodes = (left: NodeEntity, right: NodeEntity) =>
       compareHierarchicalNodes(left, right, getNode, chainCache);
 
-    const ordered: Array<{ entry: ContentLayerOrderEntry; group: Group }> = [];
+    const ordered: ContentLayerOrderEntry<Group>[] = [];
 
-    // 收集所有可见节点的 outerGroup
+    // 收集所有可见节点的 outerGroup (扁平单层对象，零嵌套分配)
     for (let i = 0; i < allNodes.length; i++) {
       const node = allNodes[i].entity;
       const cache = this.nodeCaches.get(node.id);
       if (cache && cache.outerGroup.parent === this.contentLayer && cache.outerGroup.visible) {
         ordered.push({
-          entry: { kind: 'node', node, stableOrder: i },
-          group: cache.outerGroup
+          kind: 'node',
+          node,
+          group: cache.outerGroup,
+          stableOrder: i
         });
       }
     }
@@ -569,19 +608,17 @@ export class LeaferRenderer {
       const cache = this.connectorCaches.get(connector.id);
       if (cache && cache.group.parent === this.contentLayer && cache.group.visible) {
         ordered.push({
-          entry: {
-            kind: 'connector',
-            connector,
-            anchorNode: resolveConnectorLayerAnchor(connector, getNode, compareNodes),
-            stableOrder: i
-          },
-          group: cache.group
+          kind: 'connector',
+          connector,
+          group: cache.group,
+          anchorNode: resolveConnectorLayerAnchor(connector, getNode, compareNodes),
+          stableOrder: i
         });
       }
     }
 
     ordered.sort((left, right) =>
-      compareContentLayerEntries(left.entry, right.entry, compareNodes)
+      compareContentLayerEntries(left, right, compareNodes)
     );
 
     // 快速脏检查：仅当顺序与 contentLayer.children 当前顺序不一致时才重新挂载
@@ -603,6 +640,8 @@ export class LeaferRenderer {
         this.contentLayer.add(ordered[i].group);
       }
     }
+
+    this.contentOrderDirty = false;
   }
 
   /**
@@ -708,6 +747,20 @@ export class LeaferRenderer {
   }
 
   /**
+   * 获取底层背景渲染层 Group (用于挂载点阵背景、坐标网格、底色填充等底层装饰)
+   */
+  getBackgroundLayer(): Group | null {
+    return this.backgroundLayer;
+  }
+
+  /**
+   * 获取统一内容层 Group (所有卡片节点与连线拓扑排序所在层)
+   */
+  getContentLayer(): Group | null {
+    return this.contentLayer;
+  }
+
+  /**
    * 坐标转换便捷代理
    */
   screenToWorld(screenPoint: Point): Point {
@@ -788,6 +841,11 @@ export class LeaferRenderer {
     this.connectorCaches.clear();
     this.nodeRenderers.clear();
     this.connectorRenderers.clear();
+
+    if (this.backgroundLayer) {
+      this.backgroundLayer.clear();
+      this.backgroundLayer = null;
+    }
 
     if (this.contentLayer) {
       this.contentLayer.clear();

@@ -13,11 +13,17 @@
 
 import type { ConnectorEntity, NodeEntity } from '@skynote/core';
 
-export type ContentLayerOrderEntry =
-  | { kind: 'node'; node: NodeEntity; stableOrder: number }
+export type ContentLayerOrderEntry<TGroup = unknown> =
+  | {
+      kind: 'node';
+      node: NodeEntity;
+      group: TGroup;
+      stableOrder: number;
+    }
   | {
       kind: 'connector';
       connector: ConnectorEntity;
+      group: TGroup;
       anchorNode: NodeEntity | null;
       stableOrder: number;
     };
@@ -108,11 +114,11 @@ export function resolveConnectorLayerAnchor(
 }
 
 /**
- * 内容层统一拓扑排序比较器
+ * 内容层统一拓扑排序比较器 (满足严格弱序 Strict Weak Ordering)
  */
 export function compareContentLayerEntries(
-  left: ContentLayerOrderEntry,
-  right: ContentLayerOrderEntry,
+  left: ContentLayerOrderEntry<any>,
+  right: ContentLayerOrderEntry<any>,
   compareNodes: (left: NodeEntity, right: NodeEntity) => number
 ): number {
   const leftAnchor = left.kind === 'node' ? left.node : left.anchorNode;
@@ -133,17 +139,19 @@ export function compareContentLayerEntries(
 
   if (order !== 0) return order;
 
-  // 伴生锚点相同时：连线永远排在节点紧下方 (-1)
-  if (left.kind !== right.kind) {
-    return left.kind === 'connector' ? -1 : 1;
+  // 1. 严格同一伴生锚点守卫：仅当两者属于完全相同的宿主节点时，连线才排在节点紧下方 (-1)
+  if (leftAnchor && rightAnchor && leftAnchor.id === rightAnchor.id) {
+    if (left.kind !== right.kind) {
+      return left.kind === 'connector' ? -1 : 1;
+    }
   }
 
-  // 均为连线时按连线自身 zIndex 比较
+  // 2. 均为连线时按连线自身 zIndex 比较
   if (left.kind === 'connector' && right.kind === 'connector') {
     const connectorOrder = left.connector.zIndex - right.connector.zIndex;
     if (connectorOrder !== 0) return connectorOrder;
   }
 
-  // 保持稳定输入次序
+  // 3. 跨不同锚点但同分、或同类图元：保持稳定输入次序保全传递性
   return left.stableOrder - right.stableOrder;
 }
