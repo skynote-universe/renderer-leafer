@@ -125,7 +125,8 @@ export class NodeLayer {
           y: node.y,
           width: node.width,
           height: node.height,
-          rotation: node.rotation ?? 0
+          rotation: node.rotation ?? 0,
+          origin: 'center'
         });
         cache.geomVersion = geomVersion;
       }
@@ -148,12 +149,14 @@ export class NodeLayer {
       return;
     }
 
+    // 旋转约定：绕节点中心旋转，x / y 仍为未旋转框的左上角 (origin 不改变定位，around 会改变)
     const outerGroup = new Group({
       x: node.x,
       y: node.y,
       width: node.width,
       height: node.height,
-      rotation: node.rotation ?? 0
+      rotation: node.rotation ?? 0,
+      origin: 'center'
     });
     const contentGroup = new Group();
     outerGroup.add(contentGroup);

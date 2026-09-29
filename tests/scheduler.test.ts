@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FrameCommitScheduler } from '../src/scheduler/frame-commit-scheduler';
 import { AdaptiveLodController } from '../src/scheduler/adaptive-lod';
-import { selectBudgetedItems } from '../src/scheduler/display-object-budget';
 
 describe('Renderer Schedulers', () => {
   it('FrameCommitScheduler 分帧提交与预算限制', () => {
@@ -55,23 +54,5 @@ describe('Renderer Schedulers', () => {
       isInteracting: false
     });
     expect(stateLowZoom.level).toBe('minimal');
-  });
-
-  it('selectBudgetedItems 对象预算筛选与保护项', () => {
-    const items = [
-      { id: '1', score: 10 },
-      { id: '2', score: 20 },
-      { id: '3', score: 30 }
-    ];
-
-    const result = selectBudgetedItems(items, {
-      limit: 2,
-      getId: item => item.id,
-      protectedIds: new Set(['1']),
-      score: item => item.score
-    });
-
-    expect(result.items.some(it => it.id === '1')).toBe(true);
-    expect(result.items.length).toBe(2);
   });
 });

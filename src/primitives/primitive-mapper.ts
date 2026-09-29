@@ -22,6 +22,7 @@ import type {
   GroupPrimitive,
   BoxPrimitive,
   FontWeight,
+  LineHeight,
   StrokeCap,
   TextWrap,
   TextDecoration,
@@ -32,6 +33,16 @@ import type { LeaferShape } from '../types';
 
 type LeaferStrokeCap = 'round' | 'square' | 'none';
 type LeaferFontWeight = NonNullable<InstanceType<typeof Text>['fontWeight']>;
+type LeaferLineHeight = NonNullable<InstanceType<typeof Text>['lineHeight']>;
+
+/**
+ * 转换行高：数字为字号倍数 → Leafer 百分比行高；'24px' → Leafer 像素数值
+ */
+function toLeaferLineHeight(lineHeight?: LineHeight): LeaferLineHeight | undefined {
+  if (lineHeight === undefined) return undefined;
+  if (typeof lineHeight === 'number') return { type: 'percent', value: lineHeight };
+  return Number.parseFloat(lineHeight);
+}
 
 /**
  * 转换标准 FontWeight 到 Leafer
@@ -266,7 +277,7 @@ function createTextShape(p: TextPrimitive): Text {
     textAlign: p.textAlign,
     verticalAlign: p.verticalAlign,
     textBaseline: p.textBaseline,
-    lineHeight: p.lineHeight,
+    lineHeight: toLeaferLineHeight(p.lineHeight),
     letterSpacing: p.letterSpacing,
     textWrap: toLeaferTextWrap(p.textWrap),
     textDecoration: toLeaferTextDecoration(p.textDecoration),
@@ -289,7 +300,7 @@ function updateTextShape(shape: Text, p: TextPrimitive): void {
     textAlign: p.textAlign,
     verticalAlign: p.verticalAlign,
     textBaseline: p.textBaseline,
-    lineHeight: p.lineHeight,
+    lineHeight: toLeaferLineHeight(p.lineHeight),
     letterSpacing: p.letterSpacing,
     textWrap: toLeaferTextWrap(p.textWrap),
     textDecoration: toLeaferTextDecoration(p.textDecoration),

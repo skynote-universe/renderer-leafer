@@ -22,6 +22,7 @@ import type {
   RectBounds,
   CanvasWheelEvent
 } from '@skynote/core';
+import { isPointInNode } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext, HitEntityResult } from './types';
 import {
   screenToWorld,
@@ -336,7 +337,7 @@ export class LeaferRenderer {
 
   /**
    * 节点空间碰撞拾取：在命中候选中按层级规则取最上层者 (忽略不可见节点)
-   * 空间索引的返回顺序与层叠无关，必须显式比较层级，否则重叠时会拾取到被遮挡的节点
+   * 空间索引按外接矩形粗筛，旋转节点须按实际框精判；返回顺序与层叠无关，必须显式比较层级
    */
   hitTest(point: Point): NodeEntity | undefined {
     const entityStore = this.engine.entityStore;
@@ -347,7 +348,7 @@ export class LeaferRenderer {
     const candidateIds = this.engine.spatialIndex.hitTest(point);
     for (let i = 0; i < candidateIds.length; i++) {
       const node = getNode(candidateIds[i]);
-      if (!node || node.style?.opacity === 0) continue;
+      if (!node || node.style?.opacity === 0 || !isPointInNode(point, node)) continue;
       if (!top) {
         top = node;
         continue;
