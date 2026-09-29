@@ -5,7 +5,7 @@
  * 遵守 AGENTS.md 准则与性能军规：
  * 1. 纯事务与单向数据流：仅消费 DocumentStore 广播的增量变更集，同一帧内的多次提交合并为一次 rAF 渲染；
  * 7. 帧开销与画布规模无关：每帧只处理视锥内实体与本帧删除的实体，离屏图元从场景树摘除，
- *    Leafer 自身遍历成本同样只随可见规模增长。
+ *    Leafer 自身遍历成本同样只随可见规模增长；离屏缓存按 LRU 限额淘汰，内存不随浏览过的画布面积无限增长。
  * 2. 双版本号守卫：几何变化仅更新变换矩阵，内容变化就地修改图元属性，零无谓 GC 掉帧；
  * 3. 视锥裁剪：通过 Core 的 spatialIndex 仅绘制视口范围内节点；
  * 4. 顶层瞬态通道与自动兜底守护：0 DOM 瞬态图元绘制通道，Blur 与 Escape 时 100% 自动清空无残留；
@@ -64,6 +64,9 @@ import {
   type ContentLayerOrderEntry
 } from './layering/content-layer-order';
 
+const EPHEMERAL_ESCAPE_SCOPE_ID = 'renderer:ephemeral-escape';
+const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
+
 /** 本帧要求的节点细节档位 */
 type NodeRenderDetail = 'full' | 'placeholder';
 
@@ -104,6 +107,13 @@ export class LeaferRenderer {
   /** 自上一帧以来被删除、待销毁图元缓存的实体 */
   private readonly pendingRemovedNodeIds = new Set<string>();
   private readonly pendingRemovedConnectorIds = new Set<string>();
+  /**
+   * 离屏但仍保留图元缓存的实体，Set 的插入序即 LRU 序 (最早离开视野者在前)
+   * 回到视野时移出，超出上限时从头部淘汰，每次操作 O(1)
+   */
+  private readonly offscreenNodeIds = new Set<string>();
+  private readonly offscreenConnectorIds = new Set<string>();
+  private readonly offscreenCacheLimit: number;
   /** 实体首次渲染时分配的稳定序号，作为层级完全并列时的确定性排序依据 */
   private readonly stableOrders = new Map<string, number>();
   private stableOrderSeq = 0;
@@ -123,6 +133,8 @@ export class LeaferRenderer {
     if (options?.initialViewport) {
       engine.session.setViewport(options.initialViewport);
     }
+
+    this.offscreenCacheLimit = Math.max(0, options?.offscreenCacheLimit ?? DEFAULT_OFFSCREEN_CACHE_LIMIT);
 
     // 闭环注入 enableFrameScheduler 配置
     this.frameScheduler = new FrameCommitScheduler({
@@ -211,17 +223,18 @@ export class LeaferRenderer {
       this.requestRender();
     });
 
-    // 7. 挂载全局失焦与 Esc 兜底守护，杜绝瞬态蚂蚁线框残留
+    // 7. 失焦与 Esc 兜底清空瞬态蚂蚁线框：Esc 经 ADR-005 焦点栈以最低优先级消费，
+    //    上层交互 (如取消拖拽) 先行处理；不消费事件，保留其他作用域与宿主的默认行为
     if (typeof window !== 'undefined') {
-      const { signal } = this.abortController;
-      window.addEventListener('blur', () => this.ephemeralChannel?.clearAll(), { signal });
-      window.addEventListener('keydown', (e: KeyboardEvent) => {
-        if (e.isComposing || e.keyCode === 229) return;
-        if (e.key === 'Escape') {
-          this.ephemeralChannel?.clearAll();
-        }
-      }, { signal });
+      window.addEventListener('blur', () => this.ephemeralChannel?.clearAll(), { signal: this.abortController.signal });
     }
+    this.engine.inputScopes.pushScope({
+      id: EPHEMERAL_ESCAPE_SCOPE_ID,
+      priority: -100,
+      onKeyDown: (e) => {
+        if (e.key === 'Escape') this.ephemeralChannel?.clearAll();
+      }
+    });
 
     // 8. 挂载容器尺寸监听 (ResizeObserver 自动响应)
     if (typeof ResizeObserver !== 'undefined') {
@@ -361,13 +374,19 @@ export class LeaferRenderer {
         nodeDetail
       );
       nextShownNodeIds.add(nodeId);
+      this.offscreenNodeIds.delete(nodeId);
       if (!this.shownNodeIds.has(nodeId)) this.contentOrderDirty = true;
     }
-    // 离开视锥的节点从场景树摘除，缓存保留以便回到视野时就地复用
+    // 离开视锥的节点从场景树摘除，缓存保留以便回到视野时就地复用，并进入 LRU 队尾
     for (const nodeId of this.shownNodeIds) {
-      if (!nextShownNodeIds.has(nodeId)) this.nodeCaches.get(nodeId)?.outerGroup.remove();
+      if (nextShownNodeIds.has(nodeId)) continue;
+      this.nodeCaches.get(nodeId)?.outerGroup.remove();
+      this.offscreenNodeIds.add(nodeId);
     }
     this.shownNodeIds = nextShownNodeIds;
+    while (this.offscreenNodeIds.size > this.offscreenCacheLimit) {
+      this.destroyNodeCache(this.offscreenNodeIds.values().next().value!);
+    }
 
     // 6. 渲染视锥内连线与端点标记 (接入端点几何签名与 Fast Path 守卫)
     const nextShownConnectorIds = new Set<string>();
@@ -399,12 +418,18 @@ export class LeaferRenderer {
       this.connectorCaches.set(connectorId, updated);
 
       nextShownConnectorIds.add(connectorId);
+      this.offscreenConnectorIds.delete(connectorId);
       if (!this.shownConnectorIds.has(connectorId)) this.contentOrderDirty = true;
     }
     for (const connectorId of this.shownConnectorIds) {
-      if (!nextShownConnectorIds.has(connectorId)) this.connectorCaches.get(connectorId)?.group.remove();
+      if (nextShownConnectorIds.has(connectorId)) continue;
+      this.connectorCaches.get(connectorId)?.group.remove();
+      this.offscreenConnectorIds.add(connectorId);
     }
     this.shownConnectorIds = nextShownConnectorIds;
+    while (this.offscreenConnectorIds.size > this.offscreenCacheLimit) {
+      this.destroyConnectorCache(this.offscreenConnectorIds.values().next().value!);
+    }
 
     // 7. 拓扑同步图元层级（伴生锚定与父子关系）
     if (this.contentOrderDirty) {
@@ -422,6 +447,10 @@ export class LeaferRenderer {
   }
 
   private destroyNodeCache(nodeId: string): void {
+    // 先清理索引集合：即便缓存已不存在也必须出队，否则 LRU 淘汰循环无法前进
+    this.shownNodeIds.delete(nodeId);
+    this.offscreenNodeIds.delete(nodeId);
+    this.stableOrders.delete(nodeId);
     const cache = this.nodeCaches.get(nodeId);
     if (!cache) return;
     if (cache.nodeType) {
@@ -429,11 +458,13 @@ export class LeaferRenderer {
     }
     cache.outerGroup.remove();
     this.nodeCaches.delete(nodeId);
-    this.shownNodeIds.delete(nodeId);
-    this.stableOrders.delete(nodeId);
   }
 
   private destroyConnectorCache(connectorId: string): void {
+    // 先清理索引集合：即便缓存已不存在也必须出队，否则 LRU 淘汰循环无法前进
+    this.shownConnectorIds.delete(connectorId);
+    this.offscreenConnectorIds.delete(connectorId);
+    this.stableOrders.delete(connectorId);
     const cache = this.connectorCaches.get(connectorId);
     if (!cache) return;
     if (cache.connectorType) {
@@ -441,8 +472,6 @@ export class LeaferRenderer {
     }
     cache.group.remove();
     this.connectorCaches.delete(connectorId);
-    this.shownConnectorIds.delete(connectorId);
-    this.stableOrders.delete(connectorId);
   }
 
   private applyViewportTransform(): void {
@@ -880,6 +909,7 @@ export class LeaferRenderer {
 
     this.unregisterDefaultWheel?.();
     this.unregisterDefaultWheel = null;
+    this.engine.inputScopes.popScope(EPHEMERAL_ESCAPE_SCOPE_ID);
 
     this.hostBridge?.destroy();
     this.hostBridge = null;

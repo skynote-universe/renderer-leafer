@@ -1,6 +1,7 @@
 import './setup';
 import { describe, it, expect, vi } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
+import { Rect } from 'leafer';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
 
@@ -20,8 +21,8 @@ function makeNode(id: string, x: number, extra?: Partial<NodeEntity>): NodeEntit
   };
 }
 
-function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = createLeaferRenderer(engine);
+function mountRenderer(engine: SkyNoteEngine, options?: Parameters<typeof createLeaferRenderer>[1]): LeaferRenderer {
+  const renderer = createLeaferRenderer(engine, options);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
@@ -124,4 +125,48 @@ describe('LeaferRenderer 增量渲染', () => {
     expect(contentLayer.children.length).toBe(0);
     renderer.destroy();
   });
+
+  it('离屏缓存按 LRU 限额淘汰：平移浏览时缓存规模有上限，最近离开的回到视野时复用，被淘汰的重建并成对 destroy', () => {
+    const engine = new SkyNoteEngine();
+    // 10 个节点横向排开，每屏 (1000px 宽 + 100px 缓冲) 只容纳 1 个
+    for (let i = 0; i < 10; i++) {
+      engine.documentStore.addNode(makeNode(`n${i}`, i * 2000, { nodeType: 'probe' }));
+    }
+    const renderer = mountRenderer(engine, { offscreenCacheLimit: 2 });
+    const destroyed: string[] = [];
+    renderer.nodeRenderers.register({
+      nodeType: 'probe',
+      create: (node) => [new Rect({ width: node.width, height: node.height })],
+      update: () => {},
+      destroy: (_shapes, node) => destroyed.push(node.id)
+    });
+    const cacheSize = () => (renderer as unknown as { nodeCaches: Map<string, unknown> }).nodeCaches.size;
+    const contentLayer = renderer.getContentLayer()!;
+    const panTo = (index: number) => {
+      renderer.setViewport({ x: -index * 2000 });
+      renderer.renderFrame();
+    };
+
+    // 已用兜底矩形渲染的 n0 在注册原生渲染器后不会被 destroy 记录，从 n1 起观察
+    panTo(1);
+    const n1Group = contentLayer.children[0];
+    for (let i = 2; i < 10; i++) {
+      panTo(i);
+      expect(cacheSize()).toBeLessThanOrEqual(1 + 2);
+    }
+    expect(destroyed).toContain('n1');
+
+    // n8 刚离开视野仍在缓存中：回到视野时复用同一图元
+    panTo(8);
+    const n8Group = contentLayer.children[0];
+    panTo(9);
+    panTo(8);
+    expect(contentLayer.children[0]).toBe(n8Group);
+
+    // n1 早已被淘汰：回到视野时重建
+    panTo(1);
+    expect(contentLayer.children[0]).not.toBe(n1Group);
+    renderer.destroy();
+  });
 });
+

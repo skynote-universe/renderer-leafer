@@ -9,15 +9,30 @@ function createFakeContainer() {
   const listeners = new Map<string, (e: unknown) => void>();
   const container = {
     rectCalls: 0,
+    focusCalls: 0,
+    tabIndex: -1,
     style: {} as Record<string, string>,
+    hasAttribute: () => false,
+    focus() {
+      this.focusCalls++;
+    },
     addEventListener: (type: string, handler: (e: unknown) => void) => listeners.set(type, handler),
     getBoundingClientRect() {
       this.rectCalls++;
       return { left: 10, top: 20, width: 800, height: 600 } as DOMRect;
     }
   };
-  const fire = (type: string, init: Partial<PointerEvent>) =>
-    listeners.get(type)!({ clientX: 0, clientY: 0, pointerId: 1, button: 0, stopPropagation: () => {}, ...init });
+  const fire = (type: string, init: Record<string, unknown>) =>
+    listeners.get(type)!({
+      clientX: 0,
+      clientY: 0,
+      pointerId: 1,
+      button: 0,
+      target: null,
+      stopPropagation: () => {},
+      preventDefault: () => {},
+      ...init
+    });
   return { container, fire };
 }
 
@@ -74,4 +89,31 @@ describe('DOMHostBridge 高频指针事件', () => {
     expect(seen).toEqual([node, node]);
     bridge.destroy();
   });
+
+  it('键盘经容器焦点进入焦点栈：容器可聚焦、按下指针时获焦，来自可编辑元素的按键不转发', () => {
+    const engine = new SkyNoteEngine();
+    const { container, fire } = createFakeContainer();
+    const bridge = new DOMHostBridge({
+      container: container as unknown as HTMLElement,
+      engine,
+      getViewport: () => ({ x: 0, y: 0, zoom: 1 })
+    });
+    expect(container.tabIndex).toBe(0);
+
+    const keys: string[] = [];
+    engine.inputScopes.pushScope({ id: 'probe', priority: 0, onKeyDown: (e) => { keys.push(e.key); } });
+
+    fire('pointerdown', {});
+    expect(container.focusCalls).toBe(1);
+    fire('pointerdown', { target: { tagName: 'TEXTAREA', isContentEditable: false } });
+    expect(container.focusCalls).toBe(1);
+
+    fire('keydown', { key: 'Delete', code: 'Delete', isComposing: false });
+    fire('keydown', { key: 'Backspace', code: 'Backspace', target: { tagName: 'INPUT', isContentEditable: false } });
+    fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'DIV', isContentEditable: true } });
+    fire('keydown', { key: 'Process', code: 'KeyN', isComposing: true });
+    expect(keys).toEqual(['Delete']);
+    bridge.destroy();
+  });
 });
+

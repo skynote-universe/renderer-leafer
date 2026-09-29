@@ -40,6 +40,11 @@ export interface LeaferRendererOptions {
   initialViewport?: ViewportState;
   /** 帧调度配置 (默认 true) */
   enableFrameScheduler?: boolean;
+  /**
+   * 离屏图元缓存上限 (节点与连线各自计数，默认 2000)
+   * 离开视锥的实体保留图元以便回到视野时就地复用，超出上限按最近最少出现 (LRU) 淘汰并释放
+   */
+  offscreenCacheLimit?: number;
 }
 
 /** 节点渲染图元缓存项 */

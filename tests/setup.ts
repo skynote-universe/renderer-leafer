@@ -22,6 +22,8 @@ if (typeof (globalThis as any).HTMLElement === 'undefined') {
     removeEventListener() {}
     setAttribute() {}
     getAttribute() { return null; }
+    hasAttribute() { return false; }
+    focus() {}
   };
 }
 if (typeof (globalThis as any).HTMLCanvasElement === 'undefined') {

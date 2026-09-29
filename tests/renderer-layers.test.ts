@@ -72,5 +72,35 @@ describe('LeaferRenderer 场景树图层架构', () => {
 
     renderer.destroy();
   });
+
+  it('Esc 经焦点栈以最低优先级清空瞬态图元，销毁后注销作用域', () => {
+    const engine = new SkyNoteEngine();
+    const renderer = createLeaferRenderer(engine);
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 1000 });
+    Object.defineProperty(container, 'clientHeight', { value: 800 });
+    renderer.mount(container);
+
+    const ephemeralGroup = renderer.getContentLayer()!.parent!.children[2] as unknown as { children: unknown[] };
+    renderer.ephemeral.setPrimitives('marquee', [{ kind: 'rect', x: 0, y: 0, width: 10, height: 10 }]);
+    expect(ephemeralGroup.children.length).toBeGreaterThan(0);
+
+    const escape = {
+      key: 'Escape',
+      code: 'Escape',
+      shiftKey: false,
+      altKey: false,
+      ctrlKey: false,
+      metaKey: false,
+      isComposing: false,
+      preventDefault: () => {},
+      stopPropagation: () => {}
+    };
+    engine.inputScopes.dispatchKeyDown(escape);
+    expect(ephemeralGroup.children.length).toBe(0);
+
+    renderer.destroy();
+    expect(engine.inputScopes.hasScope('renderer:ephemeral-escape')).toBe(false);
+  });
 });
 
