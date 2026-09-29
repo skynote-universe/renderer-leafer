@@ -77,6 +77,12 @@ export class LeaferRenderer {
   /** LOD 回升存在迟滞：等待期满后需主动补一帧，否则画面会停留在降级档位直到下一次交互 */
   private lodRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  /**
+   * 视口像素尺寸：挂载时读取一次，此后由 ResizeObserver 维护
+   * 渲染帧若每帧读 clientWidth，宿主同帧改过 DOM 时会强制同步布局 (layout thrashing)
+   */
+  private viewportWidth = 800;
+  private viewportHeight = 600;
   private unsubscribeDoc: (() => void) | null = null;
   private unsubscribeSession: (() => void) | null = null;
   private unregisterDefaultWheel: (() => void) | null = null;
@@ -104,12 +110,14 @@ export class LeaferRenderer {
   mount(container: HTMLElement): void {
     if (this.isDestroyed || this.container) return;
     this.container = container;
+    this.viewportWidth = container.clientWidth || 800;
+    this.viewportHeight = container.clientHeight || 600;
 
     // 1. Leafer 根应用，画布底色取自主题
     this.leaferApp = new Leafer({
       view: container,
-      width: container.clientWidth || 800,
-      height: container.clientHeight || 600,
+      width: this.viewportWidth,
+      height: this.viewportHeight,
       pixelRatio: this.dpr,
       fill: this.engine.session.theme.background
     });
@@ -198,6 +206,8 @@ export class LeaferRenderer {
           const width = Math.floor(entries[i].contentRect.width);
           const height = Math.floor(entries[i].contentRect.height);
           if (width > 0 && height > 0 && this.leaferApp) {
+            this.viewportWidth = width;
+            this.viewportHeight = height;
             this.leaferApp.resize({ width, height });
             this.requestRender();
           }
@@ -258,11 +268,7 @@ export class LeaferRenderer {
     this.pendingRemovedConnectorIds.clear();
 
     // 2. 视锥检索
-    const worldBounds = getViewportWorldBounds(
-      viewport,
-      this.container?.clientWidth || 800,
-      this.container?.clientHeight || 600
-    );
+    const worldBounds = getViewportWorldBounds(viewport, this.viewportWidth, this.viewportHeight);
     const frustum: RectBounds = {
       left: worldBounds.left - FRUSTUM_PADDING,
       top: worldBounds.top - FRUSTUM_PADDING,

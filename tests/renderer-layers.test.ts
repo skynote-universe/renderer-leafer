@@ -1,5 +1,5 @@
 import './setup';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 import { createLeaferRenderer } from '../src/leafer-renderer';
@@ -101,5 +101,59 @@ describe('LeaferRenderer 场景树图层架构', () => {
 
     renderer.destroy();
     expect(engine.inputScopes.hasScope('renderer:ephemeral-escape')).toBe(false);
+  });
+
+  describe('视口尺寸', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('渲染帧不读取容器布局尺寸，尺寸变化由 ResizeObserver 驱动视锥更新', () => {
+      let resize: ((entries: { contentRect: { width: number; height: number } }[]) => void) | null = null;
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          constructor(callback: typeof resize) {
+            resize = callback;
+          }
+          observe() {}
+          disconnect() {}
+        }
+      );
+
+      const engine = new SkyNoteEngine();
+      const makeNode = (id: string, x: number): NodeEntity => ({
+        id,
+        type: 'node',
+        nodeType: 'rect',
+        x,
+        y: 10,
+        width: 20,
+        height: 20,
+        rotation: 0,
+        zIndex: 'a0',
+        locked: false
+      });
+      engine.documentStore.addNode(makeNode('near', 10));
+      engine.documentStore.addNode(makeNode('far', 1500));
+
+      const renderer = createLeaferRenderer(engine, { enableFrameScheduler: false });
+      const container = document.createElement('div');
+      const widthRead = vi.fn(() => 400);
+      Object.defineProperty(container, 'clientWidth', { get: widthRead });
+      Object.defineProperty(container, 'clientHeight', { value: 300 });
+      renderer.mount(container);
+      const contentLayer = renderer.getContentLayer()!;
+      expect(contentLayer.children.length).toBe(1);
+
+      widthRead.mockClear();
+      renderer.renderFrame();
+      expect(widthRead).not.toHaveBeenCalled();
+
+      resize!([{ contentRect: { width: 1600, height: 300 } }]);
+      renderer.renderFrame();
+      expect(contentLayer.children.length).toBe(2);
+      renderer.destroy();
+    });
   });
 });
