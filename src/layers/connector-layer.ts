@@ -5,7 +5,7 @@
 
 import type { Group } from 'leafer';
 import type { SkyNoteEngine, CanvasTheme } from '@skynote/core';
-import type { ConnectorRenderCache } from '../types';
+import type { ConnectorRenderCache, LayerSyncResult } from '../types';
 import { renderConnector } from '../connector/connector-renderer';
 import { VisibilityTracker } from './visibility-tracker';
 
@@ -39,11 +39,12 @@ export class ConnectorLayer {
 
   /**
    * 绘制本帧视锥内连线 (路由、数据版本与主题未变时走 Fast Path 零开销)
-   * @returns 是否有连线新进入场景 (需要重排层级)
+   * 只对新进入场景的连线计时，用于校准分帧调度器
    */
-  sync(visibleIds: readonly string[], isCommitted: (id: string) => boolean, theme: CanvasTheme): boolean {
+  sync(visibleIds: readonly string[], isCommitted: (id: string) => boolean, theme: CanvasTheme): LayerSyncResult {
     const { engine, contentLayer } = this.options;
-    let entered = false;
+    const shown = this.visibility.shownIds;
+    const result: LayerSyncResult = { entered: 0, enterMs: 0 };
 
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
@@ -54,6 +55,8 @@ export class ConnectorLayer {
       const route = engine.getConnectorRoute(connectorId);
       if (!route) continue;
 
+      const entering = !shown.has(connectorId);
+      const start = entering ? performance.now() : 0;
       const updated = renderConnector(contentLayer, {
         connector: runtimeConnector.entity,
         route,
@@ -64,14 +67,17 @@ export class ConnectorLayer {
       });
       if (updated.group.parent !== contentLayer) contentLayer.add(updated.group);
       this.caches.set(connectorId, updated);
-
-      if (this.visibility.markShown(connectorId)) entered = true;
+      this.visibility.markShown(connectorId);
+      if (entering) {
+        result.enterMs += performance.now() - start;
+        result.entered++;
+      }
     }
     this.visibility.endFrame(
       (connectorId) => this.caches.get(connectorId)?.group.remove(),
       (connectorId) => this.destroy(connectorId)
     );
-    return entered;
+    return result;
   }
 
   destroy(connectorId: string): void {

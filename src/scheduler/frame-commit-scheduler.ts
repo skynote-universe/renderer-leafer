@@ -1,6 +1,11 @@
 /**
  * @file frame-commit-scheduler.ts
  * @description 海量节点分帧提交与时间预算调度器
+ *
+ * 设计考量 (Why):
+ * 1. 稳态零分配：可见集合未变且已全部提交时 (平移中的绝大多数帧) 直接返回，不重建任何集合或数组。
+ * 2. 单个实体的挂载成本由渲染器按实测耗时回传 (recordNodePhase / recordConnectorPhase) 做指数平滑，
+ *    每帧提交量随设备性能自适应。
  */
 
 export interface FrameCommitOptions {
@@ -16,9 +21,9 @@ export interface FrameCommitOptions {
 
 export interface FrameCommitTarget {
   nodeIds: readonly string[];
-  nodePriorityIds: readonly string[];
+  nodePriorityIds: Iterable<string>;
   connectorIds: readonly string[];
-  connectorPriorityIds: readonly string[];
+  connectorPriorityIds: Iterable<string>;
   urgentConnectorIds?: readonly string[];
 }
 
@@ -57,17 +62,36 @@ class CommitQueue {
   private target = new Set<string>();
   private pending: string[] = [];
 
-  reconcile(targetIds: readonly string[], priorityIds: readonly string[]): boolean {
+  reconcile(targetIds: readonly string[], priorityIds: Iterable<string>): boolean {
+    // 无待提交项时目标必然已全部提交，目标未变即可原样返回 (检索结果无重复，长度相等且逐个命中即集合相等)
+    if (this.pending.length === 0 && targetIds.length === this.target.size && containsAll(this.target, targetIds)) {
+      return false;
+    }
+
     const nextTarget = new Set(targetIds);
     const changed = !setsEqual(this.target, nextTarget);
     for (const id of this.committed) {
       if (!nextTarget.has(id)) this.committed.delete(id);
     }
     this.target = nextTarget;
-    const orderedIds = uniqueOrdered([...priorityIds, ...targetIds]);
-    this.pending = orderedIds.filter(
-      id => nextTarget.has(id) && !this.committed.has(id)
-    );
+
+    // 选中实体优先，其余按检索顺序；queued 防止选中实体在目标中重复入队
+    const pending: string[] = [];
+    const queued = new Set<string>();
+    for (const id of priorityIds) {
+      if (nextTarget.has(id) && !this.committed.has(id) && !queued.has(id)) {
+        queued.add(id);
+        pending.push(id);
+      }
+    }
+    for (let i = 0; i < targetIds.length; i++) {
+      const id = targetIds[i];
+      if (!this.committed.has(id) && !queued.has(id)) {
+        queued.add(id);
+        pending.push(id);
+      }
+    }
+    this.pending = pending;
     return changed;
   }
 
@@ -154,11 +178,10 @@ export class FrameCommitScheduler {
       this.nodeStaged,
       this.options.enabled
     );
-    const urgentConnectorIds = new Set(target.urgentConnectorIds ?? []);
     const connectorAllowance =
       this.nodes.pendingCount === 0
         ? this.connectors.pendingCount
-        : this.connectors.countPending(urgentConnectorIds);
+        : this.connectors.countPending(new Set(target.urgentConnectorIds));
     const lastConnectorBatch = this.connectors.commit(
       connectorLimit,
       this.connectorStaged,
@@ -269,8 +292,11 @@ function setsEqual(left: ReadonlySet<string>, right: ReadonlySet<string>): boole
   return true;
 }
 
-function uniqueOrdered(values: readonly string[]): string[] {
-  return [...new Set(values)];
+function containsAll(set: ReadonlySet<string>, values: readonly string[]): boolean {
+  for (let i = 0; i < values.length; i++) {
+    if (!set.has(values[i])) return false;
+  }
+  return true;
 }
 
 function positive(value: number, fallback: number): number {

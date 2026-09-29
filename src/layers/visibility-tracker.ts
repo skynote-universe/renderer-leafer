@@ -24,14 +24,10 @@ export class VisibilityTracker {
     this.nextShown = new Set();
   }
 
-  /**
-   * 标记实体本帧可见
-   * @returns 是否为新进入场景 (需要重新确定层级位置)
-   */
-  markShown(id: string): boolean {
+  /** 标记实体本帧可见；是否新进入场景由调用方在渲染前以 shownIds 判定 (endFrame 前 shownIds 仍是上一帧集合) */
+  markShown(id: string): void {
     this.nextShown.add(id);
     this.offscreen.delete(id);
-    return !this.shown.has(id);
   }
 
   /**

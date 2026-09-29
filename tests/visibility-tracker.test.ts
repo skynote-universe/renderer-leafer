@@ -7,7 +7,8 @@ function runFrame(tracker: VisibilityTracker, visible: string[]) {
   const evicted: string[] = [];
   tracker.beginFrame();
   for (const id of visible) {
-    if (tracker.markShown(id)) entered.push(id);
+    if (!tracker.shownIds.has(id)) entered.push(id);
+    tracker.markShown(id);
   }
   tracker.endFrame((id) => hidden.push(id), (id) => evicted.push(id));
   return { entered, hidden, evicted };

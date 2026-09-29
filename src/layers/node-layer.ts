@@ -3,15 +3,16 @@
  * @description 节点图层：节点图元的创建、就地更新、LOD 占位、崩溃降级与离屏缓存淘汰
  *
  * 设计考量 (Why):
- * 1. 双版本号守卫：几何版本变化只更新外层变换，数据版本、选中态、主题或细节档位变化才重建内容。
- * 2. 单节点崩溃防白屏：内容渲染异常局部捕获并降级为占位框，直到数据或选中态再次变化才重试，避免每帧重复抛错。
+ * 1. 双版本号守卫：几何版本变化只更新外层变换，数据版本、主题或细节档位变化才重建内容；
+ *    选中态不参与 (选中效果由覆盖层绘制)，框选上千节点不触发任何内容重建。
+ * 2. 单节点崩溃防白屏：内容渲染异常局部捕获并降级为占位框，直到数据再次变化才重试，避免每帧重复抛错。
  * 3. 主题驱动配色：缺省色取自主题，compose() 图元经 applyThemeToPrimitives 统一解析，本文件不含写死色值。
  */
 
 import { Group } from 'leafer';
 import type { SkyNoteEngine, NodeEntity, CanvasPrimitive, NodeFill, CanvasTheme } from '@skynote/core';
 import { applyThemeToPrimitives, resolveThemeColor } from '@skynote/core';
-import type { NodeRenderCache, LeaferRenderContext } from '../types';
+import type { NodeRenderCache, LeaferRenderContext, LayerSyncResult } from '../types';
 import { reconcileLeaferShapes } from '../primitives/primitive-mapper';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import { VisibilityTracker } from './visibility-tracker';
@@ -57,16 +58,17 @@ export class NodeLayer {
 
   /**
    * 渲染本帧视锥内节点，摘除离开视野者并按 LRU 淘汰超额缓存
-   * @returns 是否有节点新进入场景 (需要重排层级)
+   * 只对新进入场景的节点计时：已挂载节点多为版本号命中的空转，计入会把单个挂载成本估得虚高
    */
   sync(
     visibleIds: readonly string[],
     isCommitted: (id: string) => boolean,
     context: LeaferRenderContext,
     detail: NodeRenderDetail
-  ): boolean {
+  ): LayerSyncResult {
     const entityStore = this.options.engine.entityStore;
-    let entered = false;
+    const shown = this.visibility.shownIds;
+    const result: LayerSyncResult = { entered: 0, enterMs: 0 };
 
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
@@ -75,14 +77,20 @@ export class NodeLayer {
       const runtimeNode = entityStore.getNode(nodeId);
       if (!runtimeNode || runtimeNode.entity.style?.opacity === 0) continue;
 
+      const entering = !shown.has(nodeId);
+      const start = entering ? performance.now() : 0;
       this.renderOrUpdate(runtimeNode.entity, runtimeNode.runtime.geomVersion, runtimeNode.runtime.dataVersion, context, detail);
-      if (this.visibility.markShown(nodeId)) entered = true;
+      this.visibility.markShown(nodeId);
+      if (entering) {
+        result.enterMs += performance.now() - start;
+        result.entered++;
+      }
     }
     this.visibility.endFrame(
       (nodeId) => this.caches.get(nodeId)?.outerGroup.remove(),
       (nodeId) => this.destroy(nodeId)
     );
-    return entered;
+    return result;
   }
 
   /** 销毁节点图元缓存，原生渲染器资源成对释放 */
@@ -109,7 +117,6 @@ export class NodeLayer {
     detail: NodeRenderDetail
   ): void {
     const { contentLayer } = this.options;
-    const selected = context.selectedNodeIds.has(node.id);
     const cache = this.caches.get(node.id);
 
     if (cache) {
@@ -128,11 +135,10 @@ export class NodeLayer {
         cache.geomVersion = geomVersion;
       }
 
-      // 已崩溃降级的节点视同占位档位，只在数据或选中态变化时重试
+      // 已崩溃降级的节点视同占位档位，只在数据或主题变化时重试
       const renderedDetail = cache.detail === 'broken' ? detail : cache.detail;
       if (
         cache.dataVersion === dataVersion &&
-        cache.selected === selected &&
         cache.theme === context.theme &&
         renderedDetail === detail
       ) {
@@ -140,7 +146,6 @@ export class NodeLayer {
       }
 
       cache.dataVersion = dataVersion;
-      cache.selected = selected;
       cache.theme = context.theme;
       this.updateContent(cache, node, context, detail);
       return;
@@ -164,7 +169,6 @@ export class NodeLayer {
       contentGroup,
       geomVersion,
       dataVersion,
-      selected,
       detail,
       theme: context.theme,
       shapes: [],

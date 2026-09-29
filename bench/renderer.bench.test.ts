@@ -62,6 +62,18 @@ describe('渲染帧开销 (10k 节点，约 1700 个可见)', () => {
     renderer.destroy();
   });
 
+  it('全选 / 取消全选：选中态不触发节点内容重建', () => {
+    const { engine, renderer } = createScene();
+    const visibleIds = engine.spatialIndex.search({ left: 0, top: 0, right: 1250, bottom: 1000, width: 1250, height: 1000 });
+    const frame = averageFrame((i) => {
+      engine.session.setSelection({ nodeIds: i % 2 === 0 ? visibleIds : [] });
+      renderer.renderFrame();
+    });
+    console.info(`[bench] 全选切换帧 (${visibleIds.length} 个节点): ${frame.toFixed(2)}ms`);
+    expect(frame).toBeLessThan(8);
+    renderer.destroy();
+  });
+
   it('空闲帧：无变化时只做视锥检索与版本比较', () => {
     const { renderer } = createScene();
     const frame = averageFrame(() => renderer.renderFrame());

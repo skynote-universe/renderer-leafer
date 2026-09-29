@@ -295,33 +295,34 @@ export class LeaferRenderer {
     // 4. 分帧提交调度：大量实体超载时分帧缓冲，选中实体优先
     const frameResult = this.frameScheduler.reconcileAndCommit({
       nodeIds: visibleNodeIds,
-      nodePriorityIds: Array.from(session.selectedNodeIds),
+      nodePriorityIds: session.selectedNodeIds,
       connectorIds: visibleConnectorIds,
-      connectorPriorityIds: Array.from(session.selectedConnectorIds)
+      connectorPriorityIds: session.selectedConnectorIds
     });
 
     // 5. 节点与连线图层增量同步，有实体新进入场景时需为其定位层级
     const context: LeaferRenderContext = {
       viewport,
       isInteracting: this.isInteracting,
-      selectedNodeIds: session.selectedNodeIds,
-      selectedConnectorIds: session.selectedConnectorIds,
       theme: session.theme
     };
-    const nodesEntered = nodeLayer.sync(
+    const nodeSync = nodeLayer.sync(
       visibleNodeIds,
       (id) => frameResult.committedNodeIds.has(id),
       context,
       lodState.level === 'full' ? 'full' : 'placeholder'
     );
-    const connectorsEntered = connectorLayer.sync(
+    const connectorSync = connectorLayer.sync(
       visibleConnectorIds,
       (id) => frameResult.committedConnectorIds.has(id),
       session.theme
     );
+    // 以实测挂载成本校准分帧调度器，慢设备自动缩小每帧提交量，快设备减少不必要的分帧
+    this.frameScheduler.recordNodePhase(nodeSync.enterMs, nodeSync.entered);
+    this.frameScheduler.recordConnectorPhase(connectorSync.enterMs, connectorSync.entered);
 
     // 6. 层级同步：文档层级变化时全量排序并最少移动，否则只插入新挂载的实体
-    if (this.layerOrderInvalidated || nodesEntered || connectorsEntered) {
+    if (this.layerOrderInvalidated || nodeSync.entered > 0 || connectorSync.entered > 0) {
       contentOrder.sync(this.layerOrderInvalidated);
       this.layerOrderInvalidated = false;
     }

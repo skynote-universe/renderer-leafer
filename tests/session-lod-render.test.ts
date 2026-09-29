@@ -3,8 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { Rect } from 'leafer';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
+import type { FrameCommitScheduler } from '../src/scheduler/frame-commit-scheduler';
 import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
-import type { LeaferRenderContext } from '../src/types';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
   return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
@@ -35,7 +35,7 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     renderer.destroy();
   });
 
-  it('选中态翻转只重建受影响节点的内容', () => {
+  it('选中态翻转不重建任何节点内容 (选中效果由覆盖层绘制)', () => {
     const engine = new SkyNoteEngine();
     engine.documentStore.addNode(makeNode('a', 0, 'probe'));
     engine.documentStore.addNode(makeNode('b', 100, 'probe'));
@@ -45,8 +45,8 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     renderer.nodeRenderers.register({
       nodeType: 'probe',
       create: (node) => [new Rect({ width: node.width, height: node.height })],
-      update: (_shapes, node, context: LeaferRenderContext) => {
-        updates.push(`${node.id}:${context.selectedNodeIds.has(node.id)}`);
+      update: (_shapes, node) => {
+        updates.push(node.id);
       }
     });
     // 注册前已用兜底矩形渲染过，改数据触发一次原生渲染器接管
@@ -55,12 +55,39 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     renderer.renderFrame();
     updates.length = 0;
 
-    engine.session.setSelection({ nodeIds: ['a'] });
+    engine.session.setSelection({ nodeIds: ['a', 'b'] });
     renderer.renderFrame();
-    expect(updates).toEqual(['a:true']);
+    engine.session.setSelection({ nodeIds: [] });
+    renderer.renderFrame();
+    expect(updates).toEqual([]);
 
+    // 对照：数据变化仍触发原生渲染器更新
+    engine.documentStore.updateNode('a', { locked: false });
     renderer.renderFrame();
-    expect(updates).toEqual(['a:true']);
+    expect(updates).toEqual(['a']);
+    renderer.destroy();
+  });
+
+  it('渲染帧把新挂载节点的实测耗时回传分帧调度器', () => {
+    const engine = new SkyNoteEngine();
+    for (let i = 0; i < 12; i++) engine.documentStore.addNode(makeNode(`n${i}`, i * 60));
+    const renderer = mountRenderer(engine);
+    const scheduler = (renderer as unknown as { frameScheduler: FrameCommitScheduler }).frameScheduler;
+    const recorded: [number, number][] = [];
+    const original = scheduler.recordNodePhase.bind(scheduler);
+    scheduler.recordNodePhase = (durationMs, items) => {
+      recorded.push([durationMs, items]);
+      original(durationMs, items);
+    };
+
+    engine.session.setViewport({ x: -10 });
+    renderer.renderFrame();
+    expect(recorded.at(-1)![1]).toBe(0);
+
+    engine.documentStore.addNode(makeNode('late', 100));
+    renderer.renderFrame();
+    expect(recorded.at(-1)![1]).toBe(1);
+    expect(recorded.at(-1)![0]).toBeGreaterThanOrEqual(0);
     renderer.destroy();
   });
 
