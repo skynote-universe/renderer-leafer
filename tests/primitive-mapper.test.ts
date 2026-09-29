@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { CanvasPrimitive } from '@skynote/core';
 
 // 注入 Node 环境下缺失的 Canvas 全局变量，使 Leafer 在非浏览器环境中安全初始化
@@ -52,7 +52,7 @@ for (const name of eventClasses) {
   }
 }
 if (typeof (globalThis as any).requestAnimationFrame === 'undefined') {
-  (globalThis as any).requestAnimationFrame = (cb: Function) => setTimeout(cb, 16);
+  (globalThis as any).requestAnimationFrame = (cb: () => void) => setTimeout(cb, 16);
 }
 if (typeof (globalThis as any).cancelAnimationFrame === 'undefined') {
   (globalThis as any).cancelAnimationFrame = (id: any) => clearTimeout(id);

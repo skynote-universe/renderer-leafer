@@ -11,7 +11,6 @@ import type {
   NodeEntity,
   ConnectorEntity,
   Point,
-  CanvasPatch,
   CanvasTheme
 } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
@@ -63,8 +62,8 @@ export interface NodeRenderCache {
   theme: CanvasTheme;
   /** 内部创建的 Leafer 图元引用列表 (用于就地复用) */
   shapes: LeaferShape[];
-  /** 节点类型标识 (用于卸载时寻址专属原生渲染器) */
-  nodeType?: string;
+  /** 最近一次渲染的节点实体 (卸载时据其 nodeType 寻址原生渲染器，并作为 destroy 的入参) */
+  node: NodeEntity;
 }
 
 /** 连线渲染图元缓存项 */
@@ -81,8 +80,8 @@ export interface ConnectorRenderCache {
   endpointsSignature: string;
   /** 算好的折线/路径缓存 (供 hitTestConnector 碰撞计算) */
   computedPoints?: Point[];
-  /** 连线类型标识 */
-  connectorType?: string;
+  /** 最近一次渲染的连线实体 (卸载时据其 connectorType 寻址原生渲染器，并作为 destroy 的入参) */
+  connector: ConnectorEntity;
   /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */
   theme: CanvasTheme;
 }

@@ -453,9 +453,7 @@ export class LeaferRenderer {
     this.stableOrders.delete(nodeId);
     const cache = this.nodeCaches.get(nodeId);
     if (!cache) return;
-    if (cache.nodeType) {
-      this.nodeRenderers.get(cache.nodeType)?.destroy?.(cache.shapes, { id: nodeId } as any);
-    }
+    this.nodeRenderers.get(cache.node.nodeType)?.destroy?.(cache.shapes, cache.node);
     cache.outerGroup.remove();
     this.nodeCaches.delete(nodeId);
   }
@@ -467,9 +465,7 @@ export class LeaferRenderer {
     this.stableOrders.delete(connectorId);
     const cache = this.connectorCaches.get(connectorId);
     if (!cache) return;
-    if (cache.connectorType) {
-      this.connectorRenderers.get(cache.connectorType)?.destroy?.([cache.lineShape], { id: connectorId } as any);
-    }
+    this.connectorRenderers.get(cache.connector.connectorType)?.destroy?.([cache.lineShape], cache.connector);
     cache.group.remove();
     this.connectorCaches.delete(connectorId);
   }
@@ -517,6 +513,7 @@ export class LeaferRenderer {
     const selected = context.selectedNodeIds.has(node.id);
 
     if (cache) {
+      cache.node = node;
       if (cache.outerGroup.parent !== this.contentLayer) this.contentLayer.add(cache.outerGroup);
 
       if (cache.geomVersion !== geomVersion) {
@@ -569,7 +566,7 @@ export class LeaferRenderer {
       detail,
       theme: context.theme,
       shapes: [],
-      nodeType: node.nodeType
+      node
     };
 
     this.nodeCaches.set(node.id, newCache);
@@ -917,20 +914,14 @@ export class LeaferRenderer {
     this.ephemeralChannel?.destroy();
     this.ephemeralChannel = null;
 
-    for (const [cachedId, cache] of this.nodeCaches) {
-      if (cache.nodeType) {
-        const nativeRenderer = this.nodeRenderers.get(cache.nodeType);
-        nativeRenderer?.destroy?.(cache.shapes, { id: cachedId } as any);
-      }
+    for (const cache of this.nodeCaches.values()) {
+      this.nodeRenderers.get(cache.node.nodeType)?.destroy?.(cache.shapes, cache.node);
       cache.outerGroup.remove();
     }
     this.nodeCaches.clear();
 
-    for (const [cachedId, cache] of this.connectorCaches) {
-      if (cache.connectorType) {
-        const nativeRenderer = this.connectorRenderers.get(cache.connectorType);
-        nativeRenderer?.destroy?.([cache.lineShape], { id: cachedId } as any);
-      }
+    for (const cache of this.connectorCaches.values()) {
+      this.connectorRenderers.get(cache.connector.connectorType)?.destroy?.([cache.lineShape], cache.connector);
       cache.group.remove();
     }
     this.connectorCaches.clear();

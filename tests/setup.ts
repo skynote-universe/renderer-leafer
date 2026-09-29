@@ -96,7 +96,7 @@ if (typeof (globalThis as any).ResizeObserver === 'undefined') {
   };
 }
 if (typeof (globalThis as any).requestAnimationFrame === 'undefined') {
-  (globalThis as any).requestAnimationFrame = (cb: Function) => setTimeout(cb, 16);
+  (globalThis as any).requestAnimationFrame = (cb: () => void) => setTimeout(cb, 16);
 }
 if (typeof (globalThis as any).cancelAnimationFrame === 'undefined') {
   (globalThis as any).cancelAnimationFrame = (id: any) => clearTimeout(id);

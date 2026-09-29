@@ -31,11 +31,12 @@ import { Rect, Text, Ellipse, Polygon, Path, Line, Group, Box, Image } from 'lea
 import type { LeaferShape } from '../types';
 
 type LeaferStrokeCap = 'round' | 'square' | 'none';
+type LeaferFontWeight = NonNullable<InstanceType<typeof Text>['fontWeight']>;
 
 /**
  * 转换标准 FontWeight 到 Leafer
  */
-function toLeaferFontWeight(weight?: FontWeight): any {
+function toLeaferFontWeight(weight?: FontWeight): LeaferFontWeight | undefined {
   if (!weight) return undefined;
   if (weight === 'bolder') return 'bold';
   if (weight === 'lighter') return 'normal';

@@ -117,8 +117,8 @@ export function resolveConnectorLayerAnchor(
  * 内容层统一拓扑排序比较器 (满足严格弱序 Strict Weak Ordering)
  */
 export function compareContentLayerEntries(
-  left: ContentLayerOrderEntry<any>,
-  right: ContentLayerOrderEntry<any>,
+  left: ContentLayerOrderEntry<unknown>,
+  right: ContentLayerOrderEntry<unknown>,
   compareNodes: (left: NodeEntity, right: NodeEntity) => number
 ): number {
   const leftAnchor = left.kind === 'node' ? left.node : left.anchorNode;

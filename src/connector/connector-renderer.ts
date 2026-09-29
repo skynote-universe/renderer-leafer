@@ -290,7 +290,7 @@ export function renderConnector(
     existingCache.dataVersion = dataVersion;
     existingCache.endpointsSignature = currentSignature;
     existingCache.computedPoints = computedPoints;
-    existingCache.connectorType = connector.connectorType;
+    existingCache.connector = connector;
     existingCache.theme = theme;
     return existingCache;
   }
@@ -347,7 +347,7 @@ export function renderConnector(
     dataVersion,
     endpointsSignature: currentSignature,
     computedPoints,
-    connectorType: connector.connectorType,
+    connector,
     theme
   };
 }
