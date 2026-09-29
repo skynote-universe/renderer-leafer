@@ -3,7 +3,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
 import { Rect, Line } from 'leafer';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
-import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
+import type { LeaferRendererOptions } from '../src/types';
 
 function makeNode(id: string, x: number, extra?: Partial<NodeEntity>): NodeEntity {
   return {
@@ -21,8 +22,8 @@ function makeNode(id: string, x: number, extra?: Partial<NodeEntity>): NodeEntit
   };
 }
 
-function mountRenderer(engine: SkyNoteEngine, options?: Parameters<typeof createLeaferRenderer>[1]): LeaferRenderer {
-  const renderer = createLeaferRenderer(engine, options);
+function mountRenderer(engine: SkyNoteEngine, options?: LeaferRendererOptions): LeaferRenderer {
+  const renderer = new LeaferRenderer(engine, options);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });

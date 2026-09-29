@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { Box, type Group } from 'leafer';
 import { SkyNoteEngine } from '@skynote/core';
 import type { ConnectorEntity, NodeEntity, RectBounds } from '@skynote/core';
-import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 import type { NodeLayer } from '../src/layers/node-layer';
 import type { ConnectorLayer } from '../src/layers/connector-layer';
 
@@ -36,7 +36,7 @@ function makeConnector(id: string, from: string, to: string): ConnectorEntity {
 }
 
 function mount(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = createLeaferRenderer(engine, { enableFrameScheduler: false });
+  const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });

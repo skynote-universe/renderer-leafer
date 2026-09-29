@@ -2,11 +2,11 @@ import './setup';
 import { describe, it, expect } from 'vitest';
 import { SkyNoteEngine, createSimpleTextBlock } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
-import { createLeaferTextMeasurer } from '../src/text/leafer-text-measurer';
+import { LeaferTextMeasurer } from '../src/text/leafer-text-measurer';
 
-describe('createLeaferTextMeasurer', () => {
+describe('LeaferTextMeasurer', () => {
   it('按 Leafer 排版测量：限宽时文本越长折行越多，不限宽时宽度随内容增长', () => {
-    const measurer = createLeaferTextMeasurer();
+    const measurer = new LeaferTextMeasurer();
     const measure = (text: string, maxWidth?: number) =>
       measurer.measure({
         block: createSimpleTextBlock('t', text),
@@ -24,7 +24,7 @@ describe('createLeaferTextMeasurer', () => {
   });
 
   it('注入引擎后，height-driven 节点随文本变长自动撑高', () => {
-    const engine = new SkyNoteEngine({ textMeasurer: createLeaferTextMeasurer() });
+    const engine = new SkyNoteEngine({ textMeasurer: new LeaferTextMeasurer() });
     engine.nodeTypes.register({ type: 'sticky', label: '便签', defaultData: {}, sizingPolicy: 'height-driven' });
     const node: NodeEntity = {
       id: 's',

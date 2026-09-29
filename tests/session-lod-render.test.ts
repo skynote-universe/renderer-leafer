@@ -4,14 +4,14 @@ import { Rect } from 'leafer';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import type { FrameCommitScheduler } from '../src/scheduler/frame-commit-scheduler';
-import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
   return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = createLeaferRenderer(engine);
+  const renderer = new LeaferRenderer(engine);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });

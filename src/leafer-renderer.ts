@@ -15,7 +15,7 @@
 
 import { Leafer, Group } from 'leafer';
 import type { SkyNoteEngine, NodeEntity, ConnectorEntity, Point, RectBounds, CanvasWheelEvent } from '@skynote/core';
-import { compareHierarchicalNodes, computeViewportToFitBounds, isPointInNode } from '@skynote/core';
+import { computeFitViewport } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext, HitEntityResult } from './types';
 import {
   screenToWorld,
@@ -86,6 +86,7 @@ export class LeaferRenderer {
   private unsubscribeDoc: (() => void) | null = null;
   private unsubscribeSession: (() => void) | null = null;
   private unregisterDefaultWheel: (() => void) | null = null;
+  private detachHost: (() => void) | null = null;
   private readonly abortController = new AbortController();
   private isDestroyed = false;
 
@@ -160,6 +161,9 @@ export class LeaferRenderer {
       }
     });
 
+    // 宿主能力 (光标、指针捕获、覆盖层) 挂到引擎上，交互插件经插件上下文使用
+    this.detachHost = this.engine.attachHost({ bridge: this.hostBridge, overlay: this.ephemeralChannel });
+
     // 4. 底座默认滚轮缩放平移 (最低优先级，允许上层交互优先拦截)
     this.unregisterDefaultWheel = this.engine.pointer.register(
       'renderer:viewport-wheel',
@@ -184,13 +188,15 @@ export class LeaferRenderer {
 
     // 7. 失焦与 Esc 兜底清空瞬态图元：Esc 经焦点栈以最低优先级消费，上层交互 (如取消拖拽) 先行处理
     if (typeof window !== 'undefined') {
-      window.addEventListener('blur', () => this.ephemeralChannel?.clearAll(), { signal: this.abortController.signal });
+      window.addEventListener('blur', () => this.ephemeralChannel?.clearTransient(), {
+        signal: this.abortController.signal
+      });
     }
     this.engine.inputScopes.pushScope({
       id: EPHEMERAL_ESCAPE_SCOPE_ID,
       priority: -100,
       onKeyDown: (e) => {
-        if (e.key === 'Escape') this.ephemeralChannel?.clearAll();
+        if (e.key === 'Escape') this.ephemeralChannel?.clearTransient();
       }
     });
 
@@ -355,33 +361,10 @@ export class LeaferRenderer {
   }
 
   /**
-   * 节点空间碰撞拾取：在命中候选中按层级规则取最上层者 (忽略不可见节点)
-   * 空间索引按外接矩形粗筛，再按世界矩阵精判 (含自身与祖先旋转)；落在裁剪型祖先 (画框) 之外的部分不可拾取；
-   * 候选返回顺序与层叠无关，必须显式比较层级
+   * 节点点选：委托内核 (含旋转精判、裁剪型容器与层叠顺序)
    */
   hitTest(point: Point): NodeEntity | undefined {
-    const { entityStore, nodeTypes } = this.engine;
-    const chainCache = new Map<string, NodeEntity[]>();
-    const getNode = (id: string) => entityStore.getNode(id)?.entity;
-    const containsPoint = (node: NodeEntity) => isPointInNode(point, node, entityStore.getWorldTransform(node.id)!);
-    const isClippedOut = (node: NodeEntity): boolean => {
-      for (let parent = node.parentId === undefined ? undefined : getNode(node.parentId); parent;) {
-        if (nodeTypes.get(parent.nodeType)?.clipChildren && !containsPoint(parent)) return true;
-        parent = parent.parentId === undefined ? undefined : getNode(parent.parentId);
-      }
-      return false;
-    };
-
-    let top: NodeEntity | undefined;
-    const candidateIds = this.engine.spatialIndex.hitTest(point);
-    for (let i = 0; i < candidateIds.length; i++) {
-      const node = getNode(candidateIds[i]);
-      if (!node || node.style?.opacity === 0 || !containsPoint(node)) continue;
-      if (top && compareHierarchicalNodes(node, top, getNode, chainCache) < 0) continue;
-      if (isClippedOut(node)) continue;
-      top = node;
-    }
-    return top;
+    return this.engine.hitTestNode(point);
   }
 
   /**
@@ -453,31 +436,19 @@ export class LeaferRenderer {
    * @param maxZoom 内容很少时不放得过大 (默认 1，即不超过原始尺寸)
    */
   zoomToFit(options?: { padding?: number; maxZoom?: number }): void {
-    const bounds = this.engine.spatialIndex.getContentBounds();
-    if (!bounds) {
-      this.setViewport({ x: 0, y: 0, zoom: 1 });
-      return;
-    }
-    const { zoomRange } = this.engine.session;
-    const maxZoom = Math.min(options?.maxZoom ?? 1, zoomRange.max);
-    const fitted = computeViewportToFitBounds(bounds, {
-      viewportWidth: this.viewportWidth,
-      viewportHeight: this.viewportHeight,
-      padding: options?.padding ?? 80,
-      minZoom: zoomRange.min,
-      maxZoom
-    });
-    if (fitted) {
-      this.setViewport(fitted);
-      return;
-    }
-    // 内容退化为一条线或一个点时无法按面积适配：保持缩放，把内容中心移到视口中心
-    const zoom = Math.min(this.engine.session.viewport.zoom, maxZoom);
-    this.setViewport({
-      x: this.viewportWidth / 2 - (bounds.left + bounds.width / 2) * zoom,
-      y: this.viewportHeight / 2 - (bounds.top + bounds.height / 2) * zoom,
-      zoom
-    });
+    const { session, spatialIndex } = this.engine;
+    this.setViewport(
+      computeFitViewport(
+        spatialIndex.getContentBounds(),
+        { width: this.viewportWidth, height: this.viewportHeight },
+        session.viewport,
+        {
+          padding: options?.padding ?? 80,
+          minZoom: session.zoomRange.min,
+          maxZoom: Math.min(options?.maxZoom ?? 1, session.zoomRange.max)
+        }
+      )
+    );
   }
 
   /** 获取当前自适应 LOD 等级 */
@@ -530,6 +501,8 @@ export class LeaferRenderer {
     this.unregisterDefaultWheel = null;
     this.engine.inputScopes.popScope(EPHEMERAL_ESCAPE_SCOPE_ID);
 
+    this.detachHost?.();
+    this.detachHost = null;
     this.hostBridge?.destroy();
     this.hostBridge = null;
     this.ephemeralChannel?.destroy();
@@ -577,11 +550,4 @@ export class LeaferRenderer {
       this.setViewport({ x: viewport.x + e.deltaPan.x, y: viewport.y + e.deltaPan.y });
     }
   }
-}
-
-/**
- * 辅助工厂函数
- */
-export function createLeaferRenderer(engine: SkyNoteEngine, options?: LeaferRendererOptions): LeaferRenderer {
-  return new LeaferRenderer(engine, options);
 }

@@ -3,11 +3,11 @@ import { describe, it, expect } from 'vitest';
 import type { Text } from 'leafer';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
-import { createLeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 import { createLeaferShapeFromPrimitive } from '../src/primitives/primitive-mapper';
 
 function mount(engine: SkyNoteEngine) {
-  const renderer = createLeaferRenderer(engine);
+  const renderer = new LeaferRenderer(engine);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });

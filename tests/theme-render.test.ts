@@ -2,14 +2,14 @@ import './setup';
 import { describe, it, expect } from 'vitest';
 import { SkyNoteEngine, DARK_CANVAS_THEME_SEED, LIGHT_CANVAS_THEME_SEED } from '@skynote/core';
 import type { NodeEntity, ConnectorEntity, CanvasTheme } from '@skynote/core';
-import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
   return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = createLeaferRenderer(engine);
+  const renderer = new LeaferRenderer(engine);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });

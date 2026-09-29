@@ -1,11 +1,11 @@
 import './setup';
 import { describe, it, expect } from 'vitest';
-import { SkyNoteEngine, createCanvasWheelEvent } from '@skynote/core';
+import { SkyNoteEngine, SyntheticWheelEvent } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
-import { createLeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 
 function mount(engine: SkyNoteEngine) {
-  const renderer = createLeaferRenderer(engine, { enableFrameScheduler: false });
+  const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
@@ -54,7 +54,7 @@ describe('视口控制', () => {
     expect(400 * zoom + y).toBeCloseTo(400);
 
     // 快速滚轮的巨大增量既不会得到负倍率，也不会越过范围
-    engine.pointer.dispatchWheel(createCanvasWheelEvent({ centerPoint: { x: 0, y: 0 }, deltaZoom: -50 }));
+    engine.pointer.dispatchWheel(new SyntheticWheelEvent({ centerPoint: { x: 0, y: 0 }, deltaZoom: -50 }));
     expect(engine.session.viewport.zoom).toBe(0.5);
     renderer.destroy();
   });

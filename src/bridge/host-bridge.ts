@@ -15,16 +15,8 @@
  *    按下、抬起、取消前先冲刷该指针待分发的移动，保证事件顺序。
  */
 
-import type {
-  IHostBridge,
-  SystemCursor,
-  CanvasPointerEvent,
-  CanvasWheelEvent,
-  CanvasKeyboardEvent,
-  SkyNoteEngine,
-  Point,
-  NodeEntity
-} from '@skynote/core';
+import type { IHostBridge, SystemCursor, CanvasKeyboardEvent, SkyNoteEngine, Point, NodeEntity } from '@skynote/core';
+import { SyntheticPointerEvent, SyntheticWheelEvent } from '@skynote/core';
 import { screenToWorld, type ViewportState } from '../viewport/viewport-transform';
 
 /** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键) */
@@ -170,48 +162,22 @@ export class DOMHostBridge implements IHostBridge {
     }
   }
 
-  private toCanvasPointerEvent(e: PointerEvent): CanvasPointerEvent {
+  private toCanvasPointerEvent(e: PointerEvent): SyntheticPointerEvent {
     const rect = this.getContainerRect();
-    const clientPoint: Point = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
-    };
-
-    const worldPoint = screenToWorld(clientPoint, this.getViewport());
-    const hitTest = this.hitTest;
-    let target: NodeEntity | undefined;
-    let isTargetResolved = false;
-    let isClaimed = false;
-
-    return {
-      point: worldPoint,
+    const clientPoint: Point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    const point = screenToWorld(clientPoint, this.getViewport());
+    const { hitTest } = this;
+    return new SyntheticPointerEvent({
+      point,
       clientPoint,
-      get target() {
-        if (!isTargetResolved) {
-          target = hitTest?.(worldPoint);
-          isTargetResolved = true;
-        }
-        return target;
-      },
       pointerId: e.pointerId,
       button: e.button,
-      modifiers: {
-        shift: e.shiftKey,
-        alt: e.altKey,
-        ctrl: e.ctrlKey,
-        meta: e.metaKey
-      },
+      modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
       pressure: e.pressure || 0.5,
-      get isClaimed() {
-        return isClaimed;
-      },
-      claimPointer: (_claimerId: string) => {
-        isClaimed = true;
-      },
-      stopPropagation: () => {
-        e.stopPropagation();
-      }
-    };
+      // 命中拾取延迟到首次读取 target (多数移动监听者不读)
+      resolveTarget: hitTest && (() => hitTest(point)),
+      onStopPropagation: () => e.stopPropagation()
+    });
   }
 
   /** 按下、抬起、取消前先分发该指针待合并的移动，保证下游看到的事件顺序与真实顺序一致 */
@@ -299,14 +265,15 @@ export class DOMHostBridge implements IHostBridge {
       x: wheel.latest.clientX - rect.left,
       y: wheel.latest.clientY - rect.top
     };
-    const wheelEvent: CanvasWheelEvent = {
-      centerPoint: screenToWorld(clientPoint, this.getViewport()),
-      deltaPan: isZoom ? { x: 0, y: 0 } : { x: -wheel.deltaX, y: -wheel.deltaY },
-      // 对数刻度：累加后取指数即为各次缩放倍率之积，合并与否结果一致
-      deltaZoom: isZoom ? -wheel.deltaY * 0.002 : 0,
-      isGesture: wheel.latest.ctrlKey,
-      stopPropagation: () => wheel.latest.stopPropagation()
-    };
-    this.engine.pointer.dispatchWheel(wheelEvent);
+    this.engine.pointer.dispatchWheel(
+      new SyntheticWheelEvent({
+        centerPoint: screenToWorld(clientPoint, this.getViewport()),
+        deltaPan: isZoom ? { x: 0, y: 0 } : { x: -wheel.deltaX, y: -wheel.deltaY },
+        // 对数刻度：累加后取指数即为各次缩放倍率之积，合并与否结果一致
+        deltaZoom: isZoom ? -wheel.deltaY * 0.002 : 0,
+        isGesture: wheel.latest.ctrlKey,
+        onStopPropagation: () => wheel.latest.stopPropagation()
+      })
+    );
   }
 }

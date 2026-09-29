@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import type { Group } from 'leafer';
 import { SkyNoteEngine, compareHierarchicalNodes } from '@skynote/core';
 import type { ConnectorEntity, NodeEntity } from '@skynote/core';
-import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 import { compareContentLayerEntries, type ContentLayerOrderEntry } from '../src/layering/content-layer-order';
 import type { NodeLayer } from '../src/layers/node-layer';
 import type { ConnectorLayer } from '../src/layers/connector-layer';
@@ -130,7 +130,7 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
     for (let i = 0; i < 120; i++) addRandomNode();
     for (let i = 0; i < 40; i++) addRandomConnector();
 
-    const renderer = createLeaferRenderer(engine, { enableFrameScheduler: false });
+    const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 1000 });
     Object.defineProperty(container, 'clientHeight', { value: 800 });

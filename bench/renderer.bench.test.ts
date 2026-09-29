@@ -10,7 +10,7 @@ import '../tests/setup';
 import { describe, it, expect } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
 import type { CanvasPatch, NodeEntity } from '@skynote/core';
-import { createLeaferRenderer } from '../src/leafer-renderer';
+import { LeaferRenderer } from '../src/leafer-renderer';
 
 function createScene() {
   const engine = new SkyNoteEngine();
@@ -32,7 +32,7 @@ function createScene() {
   }
   engine.documentStore.commit({ patches, undoable: false });
 
-  const renderer = createLeaferRenderer(engine, { enableFrameScheduler: false });
+  const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
