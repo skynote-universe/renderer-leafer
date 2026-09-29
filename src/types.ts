@@ -11,7 +11,8 @@ import type {
   NodeEntity,
   ConnectorEntity,
   Point,
-  CanvasTheme
+  CanvasTheme,
+  ComputedRoute
 } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 import type { ViewportState } from './viewport/viewport-transform';
@@ -72,14 +73,12 @@ export interface ConnectorRenderCache {
   readonly lineShape: Line | Path;
   startMarkerShape?: LeaferShape;
   endMarkerShape?: LeaferShape;
-  /** 最近一次渲染时的连线几何版本号 */
-  geomVersion: number;
+  /** 最近一次绘制所用的路由 (按引用比较，路由重算即失效) */
+  route: ComputedRoute;
   /** 最近一次渲染时的连线业务数据版本号 */
   dataVersion: number;
-  /** 关联两端节点几何版本签名 (nodeFromGeomVersion:nodeToGeomVersion) */
-  endpointsSignature: string;
-  /** 算好的折线/路径缓存 (供 hitTestConnector 碰撞计算) */
-  computedPoints?: Point[];
+  /** 实际绘制的折线点集 (两端已按箭头后撤) */
+  computedPoints: Point[];
   /** 最近一次渲染的连线实体 (卸载时据其 connectorType 寻址原生渲染器，并作为 destroy 的入参) */
   connector: ConnectorEntity;
   /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */

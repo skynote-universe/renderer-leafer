@@ -1,7 +1,7 @@
 import './setup';
 import { describe, it, expect, vi } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
-import { Rect } from 'leafer';
+import { Rect, Line } from 'leafer';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
 
@@ -166,6 +166,50 @@ describe('LeaferRenderer 增量渲染', () => {
     // n1 早已被淘汰：回到视野时重建
     panTo(1);
     expect(contentLayer.children[0]).not.toBe(n1Group);
+    renderer.destroy();
+  });
+
+  it('连线按引擎路由绘制：路由器晚注册后下一帧重绘，仅绕行段进入视口的连线同样可见', () => {
+    const engine = new SkyNoteEngine();
+    engine.documentStore.addNode(makeNode('a', 0));
+    engine.documentStore.addNode(makeNode('b', 300));
+    const connector: ConnectorEntity = {
+      id: 'c1',
+      type: 'connector',
+      connectorType: 'detour',
+      from: { nodeId: 'a' },
+      to: { nodeId: 'b' },
+      zIndex: 0,
+      locked: false
+    };
+    engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
+    const renderer = mountRenderer(engine);
+    const contentLayer = renderer.getContentLayer()!;
+    const linePoints = (): number[] => {
+      for (const child of contentLayer.children) {
+        const line = (child as unknown as { children?: unknown[] }).children?.find((shape) => shape instanceof Line);
+        if (line) return (line as InstanceType<typeof Line>).points as number[];
+      }
+      throw new Error('未找到连线图元');
+    };
+
+    // 未注册 detour 时回退直线：2 个点
+    expect(linePoints()).toHaveLength(4);
+
+    engine.routers.register({
+      id: 'detour',
+      label: '绕行',
+      route: ({ startPoint, endPoint }) => ({
+        points: [startPoint, { x: startPoint.x, y: 5000 }, { x: endPoint.x, y: 5000 }, endPoint]
+      })
+    });
+    renderer.renderFrame();
+    expect(linePoints()).toHaveLength(8);
+
+    // 视口只覆盖绕行的水平段 (y≈5000)，两端节点均在视口外
+    renderer.setViewport({ x: 0, y: -4800 });
+    renderer.renderFrame();
+    expect(contentLayer.children).toHaveLength(1);
     renderer.destroy();
   });
 });

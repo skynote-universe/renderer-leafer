@@ -3,19 +3,18 @@
  * @description 连线与端点标记原生渲染器 (ConnectorRenderer)
  * 
  * 遵守核心架构分层与性能军规：
- * 1. 算法与路由收敛于 core 的 ConnectorRouterRegistry 与 ArrowMarkerRegistry；
- * 2. 双版本号与端点签名守卫 (Fast Path)：当连线属性及两端节点几何未变更时，直接返回已有缓存，0 运算 0 GC；
+ * 1. 路由由 core 引擎统一求解 (engine.getConnectorRoute)，本文件只负责绘制，箭头定义来自 ArrowMarkerRegistry；
+ * 2. 引用守卫 (Fast Path)：路由对象、数据版本与主题均未变化时直接复用缓存，0 运算 0 GC；
  * 3. 端点箭头后撤 (lineOffset)：根据切线方向计算端点后撤向量，彻底解决粗线条穿透箭头尖端的问题；
  * 4. 就地复用：连线 Line 与两端 Path 箭头采用对象池化覆写，杜绝无谓 GC 掉帧。
  */
 
 import type {
   ConnectorEntity,
-  NodeEntity,
+  ComputedRoute,
   Point,
   StrokeCap,
   ArrowMarkerFillRule,
-  ConnectorRouterRegistry,
   ArrowMarkerRegistry,
   ArrowMarkerDefinition,
   CanvasTheme
@@ -26,16 +25,11 @@ import type { ConnectorRenderCache } from '../types';
 
 export interface ConnectorRenderOptions {
   connector: ConnectorEntity;
-  geomVersion: number;
+  /** 引擎求解的当前路由 (连线自身或两端节点几何变化时整体替换) */
+  route: ComputedRoute;
   dataVersion: number;
-  fromNode?: NodeEntity;
-  toNode?: NodeEntity;
-  fromNodeGeomVersion?: number;
-  toNodeGeomVersion?: number;
-  routers: ConnectorRouterRegistry;
   arrowMarkers: ArrowMarkerRegistry;
   existingCache?: ConnectorRenderCache;
-  dpr?: number;
   /** 当前主题：未设置描边色的连线取 connectorStroke，空心箭头取画布底色 */
   theme: CanvasTheme;
 }
@@ -46,37 +40,6 @@ function toLeaferStrokeCap(cap?: StrokeCap): LeaferStrokeCap | undefined {
   if (!cap) return undefined;
   if (cap === 'butt') return 'none';
   return cap as LeaferStrokeCap;
-}
-
-/**
- * 求解端点世界坐标 (优先自由坐标，其次根据 anchorId 求解吸附点，兜底节点中心)
- */
-function resolveEndpoint(
-  endpoint: { position?: Point; nodeId?: string; anchorId?: string },
-  node?: NodeEntity
-): Point {
-  if (endpoint.position) {
-    return { ...endpoint.position };
-  }
-  if (node) {
-    if (endpoint.anchorId && node.anchors && node.anchors.length > 0) {
-      const anchor = node.anchors.find(a => a.id === endpoint.anchorId);
-      if (anchor) {
-        // 归一化比例 (0~1) 或绝对偏移解算
-        const relX = anchor.x <= 1 && anchor.x >= 0 ? node.width * anchor.x : anchor.x;
-        const relY = anchor.y <= 1 && anchor.y >= 0 ? node.height * anchor.y : anchor.y;
-        return {
-          x: node.x + relX,
-          y: node.y + relY
-        };
-      }
-    }
-    return {
-      x: node.x + node.width / 2,
-      y: node.y + node.height / 2
-    };
-  }
-  return { x: 0, y: 0 };
 }
 
 /**
@@ -111,56 +74,22 @@ export function renderConnector(
   parentGroup: Group,
   options: ConnectorRenderOptions
 ): ConnectorRenderCache {
-  const {
-    connector,
-    geomVersion,
-    dataVersion,
-    fromNode,
-    toNode,
-    fromNodeGeomVersion = 0,
-    toNodeGeomVersion = 0,
-    routers,
-    arrowMarkers,
-    existingCache,
-    theme
-  } = options;
+  const { connector, route, dataVersion, arrowMarkers, existingCache, theme } = options;
 
-  // 端点全景几何签名：涵盖节点 ID、锚点 ID、版本号及自由坐标，杜绝锚点切换时不触发重绘
-  const currentSignature = `${connector.from.nodeId ?? ''}:${connector.from.anchorId ?? ''}:${fromNodeGeomVersion}:${connector.from.position?.x ?? ''},${connector.from.position?.y ?? ''}:${connector.to.nodeId ?? ''}:${connector.to.anchorId ?? ''}:${toNodeGeomVersion}:${connector.to.position?.x ?? ''},${connector.to.position?.y ?? ''}`;
-
-  // 极速快慢分支 (Fast Path)：如果连线属性和两端点均未发生改变，直接复用已有图元
+  // 极速快慢分支 (Fast Path)：路由、属性与主题均未变化时直接复用已有图元
   if (
     existingCache &&
-    existingCache.geomVersion === geomVersion &&
+    existingCache.route === route &&
     existingCache.dataVersion === dataVersion &&
-    existingCache.endpointsSignature === currentSignature &&
     existingCache.theme === theme
   ) {
-    existingCache.group.visible = true;
     return existingCache;
   }
 
-  const rawStart = resolveEndpoint(connector.from, fromNode);
-  const rawEnd = resolveEndpoint(connector.to, toNode);
-
-  // 1. 通过 Core 的 Router 求解连线路径
-  const router = routers.get(connector.connectorType);
-  let computedPoints: Point[] = [];
-
-  if (router) {
-    const routeResult = router.route({
-      startPoint: rawStart,
-      endPoint: rawEnd,
-      controlPoints: connector.controlPoints,
-      style: connector.style,
-      connector
-    });
-    computedPoints = routeResult.points.map(p => ({ ...p }));
-  } else if (connector.controlPoints && connector.controlPoints.length >= 2) {
-    computedPoints = connector.controlPoints.map(p => ({ ...p }));
-  } else {
-    computedPoints = [{ ...rawStart }, { ...rawEnd }];
-  }
+  const rawStart = route.points[0];
+  const rawEnd = route.points[route.points.length - 1];
+  // 箭头后撤会改写两端点，复制一份绘制用点集，保持路由缓存不可变
+  const computedPoints: Point[] = route.points.map((p) => ({ x: p.x, y: p.y }));
 
   const strokeColor = resolveThemeColor(connector.style?.stroke, theme, theme.connectorStroke)!;
   const strokeWidth = connector.style?.strokeWidth ?? 2;
@@ -286,9 +215,8 @@ export function renderConnector(
       existingCache.endMarkerShape.visible = false;
     }
 
-    existingCache.geomVersion = geomVersion;
+    existingCache.route = route;
     existingCache.dataVersion = dataVersion;
-    existingCache.endpointsSignature = currentSignature;
     existingCache.computedPoints = computedPoints;
     existingCache.connector = connector;
     existingCache.theme = theme;
@@ -343,9 +271,8 @@ export function renderConnector(
     lineShape,
     startMarkerShape,
     endMarkerShape,
-    geomVersion,
+    route,
     dataVersion,
-    endpointsSignature: currentSignature,
     computedPoints,
     connector,
     theme

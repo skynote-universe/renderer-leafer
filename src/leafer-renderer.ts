@@ -396,22 +396,15 @@ export class LeaferRenderer {
       const runtimeConnector = entityStore.getConnector(connectorId);
       if (!runtimeConnector || runtimeConnector.entity.style?.strokeWidth === 0) continue;
 
-      const connector = runtimeConnector.entity;
-      const fromRuntime = connector.from.nodeId ? entityStore.getNode(connector.from.nodeId) : undefined;
-      const toRuntime = connector.to.nodeId ? entityStore.getNode(connector.to.nodeId) : undefined;
+      const route = this.engine.getConnectorRoute(connectorId);
+      if (!route) continue;
 
       const updated = renderConnector(this.contentLayer, {
-        connector,
-        geomVersion: runtimeConnector.runtime.geomVersion,
+        connector: runtimeConnector.entity,
+        route,
         dataVersion: runtimeConnector.runtime.dataVersion,
-        fromNode: fromRuntime?.entity,
-        toNode: toRuntime?.entity,
-        fromNodeGeomVersion: fromRuntime?.runtime.geomVersion ?? 0,
-        toNodeGeomVersion: toRuntime?.runtime.geomVersion ?? 0,
-        routers: this.engine.routers,
         arrowMarkers: this.engine.arrowMarkers,
         existingCache: this.connectorCaches.get(connectorId),
-        dpr: this.dpr,
         theme: session.theme
       });
       if (updated.group.parent !== this.contentLayer) this.contentLayer.add(updated.group);
@@ -779,10 +772,11 @@ export class LeaferRenderer {
       const runtimeConnector = this.engine.entityStore.getConnector(candidateIds[i]);
       if (!runtimeConnector || runtimeConnector.entity.style?.strokeWidth === 0) continue;
 
-      const cache = this.connectorCaches.get(candidateIds[i]);
-      if (!cache || !cache.computedPoints || cache.computedPoints.length < 2) continue;
+      // 按引擎路由精判：离屏或尚未绘制的连线同样可拾取
+      const route = this.engine.getConnectorRoute(candidateIds[i]);
+      if (!route) continue;
 
-      if (distanceToPolyline(point, cache.computedPoints) <= worldTolerance) {
+      if (distanceToPolyline(point, route.points) <= worldTolerance) {
         return runtimeConnector.entity;
       }
     }
