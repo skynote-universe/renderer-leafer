@@ -261,7 +261,7 @@ function createTextShape(p: TextPrimitive): Text {
     fontFamily: p.fontFamily,
     fontWeight: toLeaferFontWeight(p.fontWeight),
     italic: p.fontStyle === 'italic',
-    fill: p.fill ?? '#000000',
+    fill: p.fill,
     textAlign: p.textAlign,
     verticalAlign: p.verticalAlign,
     textBaseline: p.textBaseline,
@@ -284,7 +284,7 @@ function updateTextShape(shape: Text, p: TextPrimitive): void {
     fontFamily: p.fontFamily,
     fontWeight: toLeaferFontWeight(p.fontWeight),
     italic: p.fontStyle === 'italic',
-    fill: p.fill ?? '#000000',
+    fill: p.fill,
     textAlign: p.textAlign,
     verticalAlign: p.verticalAlign,
     textBaseline: p.textBaseline,
@@ -412,7 +412,7 @@ function updatePathShape(shape: Path, p: PathPrimitive, _dpr: number): void {
 function createLineShape(p: LinePrimitive, _dpr: number): Line {
   return new Line({
     points: p.points,
-    stroke: p.stroke ?? '#000000',
+    stroke: p.stroke,
     strokeWidth: p.strokeWidth ?? 1,
     strokeDashArray: p.strokeDashArray,
     strokeCap: toLeaferStrokeCap(p.strokeCap),
@@ -425,7 +425,7 @@ function createLineShape(p: LinePrimitive, _dpr: number): Line {
 function updateLineShape(shape: Line, p: LinePrimitive, _dpr: number): void {
   shape.set({
     points: p.points,
-    stroke: p.stroke ?? '#000000',
+    stroke: p.stroke,
     strokeWidth: p.strokeWidth ?? 1,
     strokeDashArray: p.strokeDashArray,
     strokeCap: toLeaferStrokeCap(p.strokeCap),

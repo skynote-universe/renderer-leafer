@@ -6,6 +6,8 @@
  * 1. 平台中立边界：此文件为面向浏览器 DOM 容器的专用桥接器，Core 不感知具体 DOM；
  * 2. 坐标归一化：DOM 原生事件解算为视口与世界逻辑坐标，挂载 claimPointer 独占裁判；
  * 3. 资源成对销毁：destroy() 彻底卸载所有事件监听，无任何残留。
+ * 4. 高频事件零强制布局：容器矩形缓存复用，仅在尺寸变化、页面滚动或新手势开始时刷新，
+ *    避免 pointermove 每次调用 getBoundingClientRect 触发同步重排；命中拾取延迟到首次读取 target 时才计算。
  */
 
 import type {
@@ -34,6 +36,8 @@ export class DOMHostBridge implements IHostBridge {
   private readonly hitTest?: (point: Point) => NodeEntity | undefined;
   private readonly onInteractionChange?: (isInteracting: boolean) => void;
   private readonly abortController = new AbortController();
+  private containerRect: DOMRect | null = null;
+  private resizeObserver: ResizeObserver | null = null;
 
   constructor(options: HostBridgeOptions) {
     this.container = options.container;
@@ -46,7 +50,7 @@ export class DOMHostBridge implements IHostBridge {
   }
 
   getViewportRect(): { width: number; height: number } {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.getContainerRect();
     return { width: rect.width, height: rect.height };
   }
 
@@ -74,7 +78,20 @@ export class DOMHostBridge implements IHostBridge {
 
   destroy(): void {
     this.abortController.abort();
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
   }
+
+  private getContainerRect(): DOMRect {
+    if (!this.containerRect) {
+      this.containerRect = this.container.getBoundingClientRect();
+    }
+    return this.containerRect;
+  }
+
+  private invalidateContainerRect = (): void => {
+    this.containerRect = null;
+  };
 
   private bindDomEvents(): void {
     const { signal } = this.abortController;
@@ -84,26 +101,39 @@ export class DOMHostBridge implements IHostBridge {
     this.container.addEventListener('pointerup', this.handlePointerUp, { signal });
     this.container.addEventListener('pointercancel', this.handlePointerCancel, { signal });
     this.container.addEventListener('wheel', this.handleWheel, { signal, passive: false });
+
+    // 任一祖先滚动或窗口尺寸变化都会让容器的视口位置失效
+    window.addEventListener('scroll', this.invalidateContainerRect, { signal, capture: true, passive: true });
+    window.addEventListener('resize', this.invalidateContainerRect, { signal, passive: true });
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(this.invalidateContainerRect);
+      this.resizeObserver.observe(this.container);
+    }
   }
 
   private toCanvasPointerEvent(e: PointerEvent): CanvasPointerEvent {
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.getContainerRect();
     const clientPoint: Point = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top
     };
 
-    const viewport = this.getViewport();
-    const worldPoint = screenToWorld(clientPoint, viewport);
-    const target = this.hitTest ? this.hitTest(worldPoint) : undefined;
-
+    const worldPoint = screenToWorld(clientPoint, this.getViewport());
+    const hitTest = this.hitTest;
+    let target: NodeEntity | undefined;
+    let isTargetResolved = false;
     let isClaimed = false;
-    let isStopped = false;
 
     return {
       point: worldPoint,
       clientPoint,
-      target,
+      get target() {
+        if (!isTargetResolved) {
+          target = hitTest?.(worldPoint);
+          isTargetResolved = true;
+        }
+        return target;
+      },
       pointerId: e.pointerId,
       button: e.button,
       modifiers: {
@@ -120,13 +150,14 @@ export class DOMHostBridge implements IHostBridge {
         isClaimed = true;
       },
       stopPropagation: () => {
-        isStopped = true;
         e.stopPropagation();
       }
     };
   }
 
   private handlePointerDown = (e: PointerEvent): void => {
+    // 新手势开始时兜底刷新一次，覆盖 CSS transform 等观察器无法感知的位移
+    this.containerRect = null;
     this.onInteractionChange?.(true);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerDown(canvasEvent);
@@ -149,7 +180,7 @@ export class DOMHostBridge implements IHostBridge {
 
   private handleWheel = (e: WheelEvent): void => {
     e.preventDefault();
-    const rect = this.container.getBoundingClientRect();
+    const rect = this.getContainerRect();
     const clientPoint: Point = {
       x: e.clientX - rect.left,
       y: e.clientY - rect.top

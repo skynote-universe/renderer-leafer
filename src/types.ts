@@ -11,7 +11,8 @@ import type {
   NodeEntity,
   ConnectorEntity,
   Point,
-  CanvasPatch
+  CanvasPatch,
+  CanvasTheme
 } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 import type { ViewportState } from './viewport/viewport-transform';
@@ -25,6 +26,8 @@ export interface LeaferRenderContext {
   readonly isInteracting: boolean;
   readonly selectedNodeIds: ReadonlySet<string>;
   readonly selectedConnectorIds: ReadonlySet<string>;
+  /** 当前主题 (主题切换时整体替换，原生渲染器应从此取色而非写死色值) */
+  readonly theme: CanvasTheme;
 }
 
 /** 渲染器构造选项 */
@@ -47,6 +50,12 @@ export interface NodeRenderCache {
   geomVersion: number;
   /** 最近一次成功渲染的业务数据版本号 */
   dataVersion: number;
+  /** 最近一次渲染时的选中态 (选中态翻转需重建内容，例如绘制选中描边) */
+  selected: boolean;
+  /** 当前内容档位：完整内容 / LOD 占位块 / 渲染崩溃后的降级占位框 */
+  detail: 'full' | 'placeholder' | 'broken';
+  /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */
+  theme: CanvasTheme;
   /** 内部创建的 Leafer 图元引用列表 (用于就地复用) */
   shapes: LeaferShape[];
   /** 节点类型标识 (用于卸载时寻址专属原生渲染器) */
@@ -69,6 +78,8 @@ export interface ConnectorRenderCache {
   computedPoints?: Point[];
   /** 连线类型标识 */
   connectorType?: string;
+  /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */
+  theme: CanvasTheme;
 }
 
 /** 顶层瞬态图元渲染会话 */

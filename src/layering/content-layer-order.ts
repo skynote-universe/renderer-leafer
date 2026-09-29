@@ -101,7 +101,7 @@ export function compareHierarchicalNodes(
  */
 export function resolveConnectorLayerAnchor(
   connector: Pick<ConnectorEntity, 'from' | 'to'>,
-  getNode: (nodeId?: string) => NodeEntity | undefined,
+  getNode: (nodeId: string) => NodeEntity | undefined,
   compareNodes: (left: NodeEntity, right: NodeEntity) => number
 ): NodeEntity | null {
   const fromNode = connector.from.nodeId ? getNode(connector.from.nodeId) : undefined;

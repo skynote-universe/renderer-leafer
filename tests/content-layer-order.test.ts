@@ -21,6 +21,7 @@ function createMockNode(params: {
     y: 0,
     width: 100,
     height: 100,
+    rotation: 0,
     zIndex: params.zIndex ?? 1,
     parentId: params.parentId,
     locked: false

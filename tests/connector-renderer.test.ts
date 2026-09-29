@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import type { ConnectorEntity } from '@skynote/core';
-import { ConnectorRouterRegistry, ArrowMarkerRegistry } from '@skynote/core';
+import { ConnectorRouterRegistry, ArrowMarkerRegistry, deriveCanvasTheme, LIGHT_CANVAS_THEME_SEED } from '@skynote/core';
+
+// 连线渲染需显式提供主题：未设置描边色时取 connectorStroke，空心箭头取画布底色
+const TEST_THEME = deriveCanvasTheme({ seed: LIGHT_CANVAS_THEME_SEED });
 
 // 注入 Node 环境 Canvas 全局 mock 以供 Leafer 静态初始化
 if (typeof (globalThis as any).CanvasRenderingContext2D === 'undefined') {
@@ -73,6 +76,9 @@ describe('Connector Renderer', () => {
 
     const connector: ConnectorEntity = {
       id: 'conn-1',
+      type: 'connector',
+      zIndex: 0,
+      locked: false,
       connectorType: 'straight',
       from: { position: { x: 0, y: 0 } },
       to: { position: { x: 100, y: 0 } },
@@ -84,6 +90,7 @@ describe('Connector Renderer', () => {
     };
 
     const cache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector,
       geomVersion: 1,
       dataVersion: 1,
@@ -97,10 +104,10 @@ describe('Connector Renderer', () => {
     expect(cache.startMarkerShape).toBeUndefined();
 
     // 终点箭头切线水平向右 (0 度)，终点坐标在端点后撤 lineOffset (默认 8px) 之后向内收敛为 92px
-    expect(cache.computedPoints.length).toBe(2);
-    expect(cache.computedPoints[0]).toEqual({ x: 0, y: 0 });
-    expect(cache.computedPoints[1].x).toBeCloseTo(92, 1);
-    expect(cache.computedPoints[1].y).toBeCloseTo(0, 1);
+    expect(cache.computedPoints!.length).toBe(2);
+    expect(cache.computedPoints![0]).toEqual({ x: 0, y: 0 });
+    expect(cache.computedPoints![1].x).toBeCloseTo(92, 1);
+    expect(cache.computedPoints![1].y).toBeCloseTo(0, 1);
   });
 
   it('Fast Path 守卫：无属性变更与端点移动时直接返回现有缓存', () => {
@@ -110,12 +117,16 @@ describe('Connector Renderer', () => {
 
     const connector: ConnectorEntity = {
       id: 'conn-fast',
+      type: 'connector',
+      zIndex: 0,
+      locked: false,
       connectorType: 'straight',
       from: { position: { x: 10, y: 10 } },
       to: { position: { x: 50, y: 50 } }
     };
 
     const firstCache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector,
       geomVersion: 1,
       dataVersion: 1,
@@ -124,6 +135,7 @@ describe('Connector Renderer', () => {
     });
 
     const secondCache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector,
       geomVersion: 1,
       dataVersion: 1,
@@ -142,12 +154,16 @@ describe('Connector Renderer', () => {
 
     const connectorNoArrow: ConnectorEntity = {
       id: 'conn-dynamic',
+      type: 'connector',
+      zIndex: 0,
+      locked: false,
       connectorType: 'straight',
       from: { position: { x: 0, y: 0 } },
       to: { position: { x: 200, y: 0 } }
     };
 
     const initialCache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector: connectorNoArrow,
       geomVersion: 1,
       dataVersion: 1,
@@ -167,6 +183,7 @@ describe('Connector Renderer', () => {
     };
 
     const updatedCache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector: connectorWithArrows,
       geomVersion: 2,
       dataVersion: 2,
@@ -214,6 +231,9 @@ describe('Connector Renderer', () => {
 
     const connector: ConnectorEntity = {
       id: 'conn-anchor',
+      type: 'connector',
+      zIndex: 0,
+      locked: false,
       connectorType: 'straight',
       from: { nodeId: 'node-from', anchorId: 'right' },
       to: { nodeId: 'node-to', anchorId: 'left' },
@@ -225,6 +245,7 @@ describe('Connector Renderer', () => {
     };
 
     const cache = renderConnector(parentGroup, {
+      theme: TEST_THEME,
       connector,
       geomVersion: 1,
       dataVersion: 1,
@@ -236,12 +257,12 @@ describe('Connector Renderer', () => {
 
     expect(cache.lineShape).toBeInstanceOf(Line);
     // 起点位于 fromNode 的 right 锚点: (100 + 80 = 180, 100 + 30 = 130)
-    expect(cache.computedPoints[0].x).toBeCloseTo(180, 1);
-    expect(cache.computedPoints[0].y).toBeCloseTo(130, 1);
+    expect(cache.computedPoints![0].x).toBeCloseTo(180, 1);
+    expect(cache.computedPoints![0].y).toBeCloseTo(130, 1);
 
     // 终点位于 toNode 的 left 锚点: (300, 130)，后撤 8px 后为 292
-    expect(cache.computedPoints[1].x).toBeCloseTo(292, 1);
-    expect(cache.computedPoints[1].y).toBeCloseTo(130, 1);
+    expect(cache.computedPoints![1].x).toBeCloseTo(292, 1);
+    expect(cache.computedPoints![1].y).toBeCloseTo(130, 1);
 
     // 空心箭头应填充白色背景底色，描边为连线颜色
     const endMarker = cache.endMarkerShape as any;

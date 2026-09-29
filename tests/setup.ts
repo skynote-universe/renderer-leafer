@@ -30,12 +30,11 @@ if (typeof (globalThis as any).HTMLCanvasElement === 'undefined') {
 if (typeof (globalThis as any).document === 'undefined') {
   const createMockCanvas = () => {
     const canvas = Object.create((globalThis as any).HTMLCanvasElement.prototype);
-    canvas.getContext = () => ({
-      measureText: () => ({ width: 100 }),
-      clearRect: () => {},
-      fillRect: () => {},
-      drawImage: () => {}
-    });
+    // Leafer 异步渲染循环会调用任意 2D 上下文方法，未声明的方法统一返回空操作，避免测试输出被 mock 缺口刷屏
+    canvas.getContext = () =>
+      new Proxy({ measureText: () => ({ width: 100 }) } as Record<string | symbol, unknown>, {
+        get: (target, key) => (key in target ? target[key] : () => {})
+      });
     canvas.style = {};
     canvas.width = 800;
     canvas.height = 600;

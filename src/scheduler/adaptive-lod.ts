@@ -164,6 +164,8 @@ export class AdaptiveLodController {
       Math.max(1, Math.floor(value * (this.options.enabled ? this.capacityScale : 1)));
 
     if (input.zoom < 0.12) promote('minimal', 'very-low-zoom');
+    // 06 号设计文档约定：缩放低于 30% 时卡片内容已不可读，停止排版改绘占位块
+    else if (input.zoom < 0.3) promote('reduced', 'low-zoom');
     else if (input.documentNodes >= 5_000 && input.zoom < 0.55) {
       promote('reduced', 'low-zoom-large-document');
     }

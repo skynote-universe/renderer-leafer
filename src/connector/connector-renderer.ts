@@ -17,8 +17,10 @@ import type {
   ArrowMarkerFillRule,
   ConnectorRouterRegistry,
   ArrowMarkerRegistry,
-  ArrowMarkerDefinition
+  ArrowMarkerDefinition,
+  CanvasTheme
 } from '@skynote/core';
+import { resolveThemeColor } from '@skynote/core';
 import { Group, Line, Path } from 'leafer';
 import type { ConnectorRenderCache } from '../types';
 
@@ -34,6 +36,8 @@ export interface ConnectorRenderOptions {
   arrowMarkers: ArrowMarkerRegistry;
   existingCache?: ConnectorRenderCache;
   dpr?: number;
+  /** 当前主题：未设置描边色的连线取 connectorStroke，空心箭头取画布底色 */
+  theme: CanvasTheme;
 }
 
 type LeaferStrokeCap = 'round' | 'square' | 'none';
@@ -93,7 +97,7 @@ function resolveMarker(
 function resolveMarkerFill(
   rule: ArrowMarkerFillRule | undefined,
   strokeColor: string,
-  backgroundColor = '#FFFFFF'
+  backgroundColor: string
 ): string | undefined {
   if (rule === 'none') return undefined;
   if (rule === 'match-background') return backgroundColor;
@@ -117,7 +121,8 @@ export function renderConnector(
     toNodeGeomVersion = 0,
     routers,
     arrowMarkers,
-    existingCache
+    existingCache,
+    theme
   } = options;
 
   // 端点全景几何签名：涵盖节点 ID、锚点 ID、版本号及自由坐标，杜绝锚点切换时不触发重绘
@@ -128,7 +133,8 @@ export function renderConnector(
     existingCache &&
     existingCache.geomVersion === geomVersion &&
     existingCache.dataVersion === dataVersion &&
-    existingCache.endpointsSignature === currentSignature
+    existingCache.endpointsSignature === currentSignature &&
+    existingCache.theme === theme
   ) {
     existingCache.group.visible = true;
     return existingCache;
@@ -156,7 +162,7 @@ export function renderConnector(
     computedPoints = [{ ...rawStart }, { ...rawEnd }];
   }
 
-  const strokeColor = connector.style?.stroke ?? '#4A5568';
+  const strokeColor = resolveThemeColor(connector.style?.stroke, theme, theme.connectorStroke)!;
   const strokeWidth = connector.style?.strokeWidth ?? 2;
   const strokeDashArray = connector.style?.strokeDashArray;
 
@@ -220,7 +226,7 @@ export function renderConnector(
 
     // 起点箭头复用/更新
     if (startMarker) {
-      const fill = resolveMarkerFill(startMarker.fillRule, strokeColor);
+      const fill = resolveMarkerFill(startMarker.fillRule, strokeColor, theme.background);
       if (existingCache.startMarkerShape instanceof Path) {
         existingCache.startMarkerShape.visible = true;
         existingCache.startMarkerShape.set({
@@ -251,7 +257,7 @@ export function renderConnector(
 
     // 终点箭头复用/更新
     if (endMarker) {
-      const fill = resolveMarkerFill(endMarker.fillRule, strokeColor);
+      const fill = resolveMarkerFill(endMarker.fillRule, strokeColor, theme.background);
       if (existingCache.endMarkerShape instanceof Path) {
         existingCache.endMarkerShape.visible = true;
         existingCache.endMarkerShape.set({
@@ -285,6 +291,7 @@ export function renderConnector(
     existingCache.endpointsSignature = currentSignature;
     existingCache.computedPoints = computedPoints;
     existingCache.connectorType = connector.connectorType;
+    existingCache.theme = theme;
     return existingCache;
   }
 
@@ -308,7 +315,7 @@ export function renderConnector(
       y: rawStart.y,
       rotation: startMarkerAngle,
       d: startMarker.d,
-      fill: resolveMarkerFill(startMarker.fillRule, strokeColor),
+      fill: resolveMarkerFill(startMarker.fillRule, strokeColor, theme.background),
       stroke: strokeColor,
       strokeWidth
     });
@@ -322,7 +329,7 @@ export function renderConnector(
       y: rawEnd.y,
       rotation: endMarkerAngle,
       d: endMarker.d,
-      fill: resolveMarkerFill(endMarker.fillRule, strokeColor),
+      fill: resolveMarkerFill(endMarker.fillRule, strokeColor, theme.background),
       stroke: strokeColor,
       strokeWidth
     });
@@ -340,6 +347,7 @@ export function renderConnector(
     dataVersion,
     endpointsSignature: currentSignature,
     computedPoints,
-    connectorType: connector.connectorType
+    connectorType: connector.connectorType,
+    theme
   };
 }

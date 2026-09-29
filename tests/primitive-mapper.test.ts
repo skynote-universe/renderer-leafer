@@ -62,6 +62,8 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
 }
 
 const { Group, Rect, Text, Box } = await import('leafer');
+type TextShape = InstanceType<typeof Text>;
+type RectShape = InstanceType<typeof Rect>;
 const {
   createLeaferShapeFromPrimitive,
   updateLeaferShapeInPlace,
@@ -81,7 +83,7 @@ describe('Primitive Mapper', () => {
       textOverflow: 'ellipsis'
     };
 
-    const textShape = createLeaferShapeFromPrimitive(textPrimitive) as Text;
+    const textShape = createLeaferShapeFromPrimitive(textPrimitive) as TextShape;
     expect(textShape).toBeInstanceOf(Text);
     expect(textShape.text).toBe('SkyNote Architecture');
     expect(textShape.x).toBe(10);
@@ -148,7 +150,7 @@ describe('Primitive Mapper', () => {
     expect(boxShape.x).toBe(10);
     expect(boxShape.children.length).toBe(1);
     // 子图元被就地复用为新坐标与颜色
-    const updatedChild = boxShape.children[0] as Rect;
+    const updatedChild = boxShape.children[0] as RectShape;
     expect(updatedChild).toBe(childRect);
     expect(updatedChild.x).toBe(5);
     expect(updatedChild.width).toBe(50);
@@ -175,11 +177,11 @@ describe('Primitive Mapper', () => {
 
     // 索引 0 被替换为 Text，且位于第 0 位 (层级未颠倒)
     expect(parent.children[0]).toBeInstanceOf(Text);
-    expect((parent.children[0] as Text).text).toBe('Replaced');
+    expect((parent.children[0] as TextShape).text).toBe('Replaced');
 
     // 索引 1 就地复用原 s1 对象
     expect(parent.children[1]).toBe(s1);
-    expect((parent.children[1] as Rect).width).toBe(30);
+    expect((parent.children[1] as RectShape).width).toBe(30);
 
     // 索引 2 为新增 Line
     expect(parent.children[2].tag).toBe('Line');
