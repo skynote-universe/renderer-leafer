@@ -434,6 +434,11 @@ export class LeaferRenderer {
     return { ...this.engine.session.viewport };
   }
 
+  /** 视口中心对应的世界坐标 (新建节点的默认落点) */
+  getViewportCenter(): Point {
+    return screenToWorld({ x: this.viewportWidth / 2, y: this.viewportHeight / 2 }, this.engine.session.viewport);
+  }
+
   /**
    * 以屏幕点 (相对容器，默认视口中心) 为不动点按倍率缩放，供缩放按钮与快捷键使用
    */
