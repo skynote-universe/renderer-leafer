@@ -9,7 +9,7 @@
  * 3. 主题驱动配色：缺省色取自主题，compose() 图元经 applyThemeToPrimitives 统一解析，本文件不含写死色值。
  */
 
-import { Group } from 'leafer';
+import { Box, Group } from 'leafer';
 import type { SkyNoteEngine, NodeEntity, CanvasPrimitive, NodeFill, CanvasTheme } from '@skynote/core';
 import { applyThemeToPrimitives, resolveThemeColor } from '@skynote/core';
 import type { NodeRenderCache, LeaferRenderContext, LayerSyncResult } from '../types';
@@ -24,6 +24,13 @@ export type NodeRenderDetail = 'full' | 'placeholder';
 function resolveNodeFill(fill: NodeFill | undefined, theme: CanvasTheme, fallback: string): string {
   const color = typeof fill === 'object' ? fill.stops[0]?.color : fill;
   return resolveThemeColor(color, theme, fallback)!;
+}
+
+/** 单帧同步的共享参数与累计结果 */
+interface NodeFrame {
+  readonly context: LeaferRenderContext;
+  readonly detail: NodeRenderDetail;
+  readonly result: LayerSyncResult;
 }
 
 export interface NodeLayerOptions {
@@ -58,45 +65,85 @@ export class NodeLayer {
 
   /**
    * 渲染本帧视锥内节点，摘除离开视野者并按 LRU 淘汰超额缓存
+   * 节点挂在父节点的子容器中 (ADR-114)：可见节点的祖先必须一并挂载，即使祖先自身不在视锥内
    * 只对新进入场景的节点计时：已挂载节点多为版本号命中的空转，计入会把单个挂载成本估得虚高
+   * @param containerIds 本帧可见连线所需的挂载容器 (须先于连线图层挂载)
    */
   sync(
     visibleIds: readonly string[],
     isCommitted: (id: string) => boolean,
     context: LeaferRenderContext,
-    detail: NodeRenderDetail
+    detail: NodeRenderDetail,
+    containerIds: Iterable<string>
   ): LayerSyncResult {
     const entityStore = this.options.engine.entityStore;
-    const shown = this.visibility.shownIds;
-    const result: LayerSyncResult = { entered: 0, enterMs: 0 };
+    const frame: NodeFrame = { context, detail, result: { entered: 0, enterMs: 0, left: 0 } };
 
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
       const nodeId = visibleIds[i];
-      if (!isCommitted(nodeId)) continue;
-      const runtimeNode = entityStore.getNode(nodeId);
-      if (!runtimeNode || runtimeNode.entity.style?.opacity === 0) continue;
-
-      const entering = !shown.has(nodeId);
-      const start = entering ? performance.now() : 0;
-      this.renderOrUpdate(
-        runtimeNode.entity,
-        runtimeNode.runtime.geomVersion,
-        runtimeNode.runtime.dataVersion,
-        context,
-        detail
-      );
-      this.visibility.markShown(nodeId);
-      if (entering) {
-        result.enterMs += performance.now() - start;
-        result.entered++;
-      }
+      if (!isCommitted(nodeId) || entityStore.getNode(nodeId)?.entity.style?.opacity === 0) continue;
+      this.show(nodeId, frame);
     }
+    for (const containerId of containerIds) this.show(containerId, frame);
     this.visibility.endFrame(
-      (nodeId) => this.caches.get(nodeId)?.outerGroup.remove(),
+      (nodeId) => {
+        this.caches.get(nodeId)?.outerGroup.remove();
+        frame.result.left++;
+      },
       (nodeId) => this.destroy(nodeId)
     );
-    return result;
+    return frame.result;
+  }
+
+  /** 已挂载节点的子容器 (连线图层据此挂载两端同在该容器内的连线)；本帧 sync 之后调用 */
+  getChildrenContainer(nodeId: string): Group | undefined {
+    const cache = this.caches.get(nodeId);
+    return cache && this.ensureChildrenContainer(cache);
+  }
+
+  /** 挂载单个节点 (先递归挂载祖先)；返回其图元缓存，节点不存在时返回 undefined */
+  private show(nodeId: string, frame: NodeFrame): NodeRenderCache | undefined {
+    if (this.visibility.isMarked(nodeId)) return this.caches.get(nodeId);
+    const entityStore = this.options.engine.entityStore;
+    const runtimeNode = entityStore.getNode(nodeId);
+    if (!runtimeNode) return undefined;
+
+    const node = runtimeNode.entity;
+    const parentCache = node.parentId === undefined ? undefined : this.show(node.parentId, frame);
+    const container = parentCache ? this.ensureChildrenContainer(parentCache) : this.options.contentLayer;
+
+    const entering = !this.visibility.shownIds.has(nodeId);
+    const start = entering ? performance.now() : 0;
+    const cache = this.renderOrUpdate(
+      node,
+      runtimeNode.runtime.geomVersion,
+      runtimeNode.runtime.dataVersion,
+      frame.context,
+      frame.detail,
+      container
+    );
+    this.visibility.markShown(nodeId);
+    if (entering) {
+      frame.result.enterMs += performance.now() - start;
+      frame.result.entered++;
+    }
+    return cache;
+  }
+
+  /**
+   * 子容器按需创建 (多数节点没有子节点)，位于自身内容之上
+   * 声明 clipChildren 的节点类型 (画框) 用 overflow: 'hide' 的 Box 裁剪，旋转后依旧正确
+   */
+  private ensureChildrenContainer(cache: NodeRenderCache): Group {
+    if (!cache.childrenContainer) {
+      const clip = this.options.engine.nodeTypes.get(cache.node.nodeType)?.clipChildren === true;
+      cache.childrenContainer = clip
+        ? new Box({ width: cache.node.width, height: cache.node.height, overflow: 'hide' })
+        : new Group();
+      cache.outerGroup.add(cache.childrenContainer);
+    }
+    return cache.childrenContainer;
   }
 
   /** 销毁节点图元缓存，原生渲染器资源成对释放 */
@@ -120,14 +167,15 @@ export class NodeLayer {
     geomVersion: number,
     dataVersion: number,
     context: LeaferRenderContext,
-    detail: NodeRenderDetail
-  ): void {
-    const { contentLayer } = this.options;
+    detail: NodeRenderDetail,
+    container: Group
+  ): NodeRenderCache {
     const cache = this.caches.get(node.id);
 
     if (cache) {
       cache.node = node;
-      if (cache.outerGroup.parent !== contentLayer) contentLayer.add(cache.outerGroup);
+      // 改挂容器或父容器被删除 (子节点回落根层级) 时换挂到新容器，层级由 ContentOrderSync 重新定位
+      if (cache.outerGroup.parent !== container) container.add(cache.outerGroup);
 
       if (cache.geomVersion !== geomVersion) {
         cache.outerGroup.set({
@@ -138,22 +186,25 @@ export class NodeLayer {
           rotation: node.rotation ?? 0,
           origin: 'center'
         });
+        if (cache.childrenContainer instanceof Box) {
+          cache.childrenContainer.set({ width: node.width, height: node.height });
+        }
         cache.geomVersion = geomVersion;
       }
 
       // 已崩溃降级的节点视同占位档位，只在数据或主题变化时重试
       const renderedDetail = cache.detail === 'broken' ? detail : cache.detail;
       if (cache.dataVersion === dataVersion && cache.theme === context.theme && renderedDetail === detail) {
-        return;
+        return cache;
       }
 
       cache.dataVersion = dataVersion;
       cache.theme = context.theme;
       this.updateContent(cache, node, context, detail);
-      return;
+      return cache;
     }
 
-    // 旋转约定：绕节点中心旋转，x / y 仍为未旋转框的左上角 (origin 不改变定位，around 会改变)
+    // 旋转约定：绕节点中心旋转，x / y 为未旋转框左上角在父容器中的局部坐标 (origin 不改变定位，around 会改变)
     const outerGroup = new Group({
       x: node.x,
       y: node.y,
@@ -164,7 +215,7 @@ export class NodeLayer {
     });
     const contentGroup = new Group();
     outerGroup.add(contentGroup);
-    contentLayer.add(outerGroup);
+    container.add(outerGroup);
 
     const newCache: NodeRenderCache = {
       outerGroup,
@@ -174,10 +225,12 @@ export class NodeLayer {
       detail,
       theme: context.theme,
       shapes: [],
-      node
+      node,
+      childrenContainer: null
     };
     this.caches.set(node.id, newCache);
     this.updateContent(newCache, node, context, detail);
+    return newCache;
   }
 
   /**

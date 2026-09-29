@@ -1,7 +1,7 @@
 import './setup';
 import { describe, it, expect } from 'vitest';
 import type { Text } from 'leafer';
-import { SkyNoteEngine, computeNodeBounds } from '@skynote/core';
+import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 import { createLeaferRenderer } from '../src/leafer-renderer';
 import { createLeaferShapeFromPrimitive } from '../src/primitives/primitive-mapper';
@@ -35,7 +35,7 @@ describe('旋转约定在渲染层的落地', () => {
 
     const group = renderer.getContentLayer()!.children[0];
     const leaferBounds = group.getBounds('box', 'local');
-    const coreBounds = computeNodeBounds(node);
+    const coreBounds = engine.getNodeWorldBounds(node.id)!;
     expect(leaferBounds.x).toBeCloseTo(coreBounds.left);
     expect(leaferBounds.y).toBeCloseTo(coreBounds.top);
     expect(leaferBounds.width).toBeCloseTo(coreBounds.width);

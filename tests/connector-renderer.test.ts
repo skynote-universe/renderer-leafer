@@ -5,7 +5,8 @@ import {
   ArrowMarkerRegistry,
   deriveCanvasTheme,
   LIGHT_CANVAS_THEME_SEED,
-  computeConnectorRoute
+  computeConnectorRoute,
+  computeNodeLocalMatrix
 } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 
@@ -14,7 +15,8 @@ const TEST_THEME = deriveCanvasTheme({ seed: LIGHT_CANVAS_THEME_SEED });
 
 /** 路由由内核引擎求解，渲染器只负责绘制：测试中直接调用同一纯函数构造路由 */
 function routeOf(connector: ConnectorEntity, nodes: Record<string, NodeEntity> = {}) {
-  return computeConnectorRoute(connector, (id) => nodes[id], new ConnectorRouterRegistry())!;
+  const resolveNode = (id: string) => nodes[id] && { node: nodes[id], worldMatrix: computeNodeLocalMatrix(nodes[id]) };
+  return computeConnectorRoute(connector, resolveNode, new ConnectorRouterRegistry())!;
 }
 
 // 注入 Node 环境 Canvas 全局 mock 以供 Leafer 静态初始化

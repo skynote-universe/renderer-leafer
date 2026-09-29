@@ -24,6 +24,11 @@ export class VisibilityTracker {
     this.nextShown = new Set();
   }
 
+  /** 本帧是否已标记可见 (祖先节点可能被多个子节点重复请求挂载) */
+  isMarked(id: string): boolean {
+    return this.nextShown.has(id);
+  }
+
   /** 标记实体本帧可见；是否新进入场景由调用方在渲染前以 shownIds 判定 (endFrame 前 shownIds 仍是上一帧集合) */
   markShown(id: string): void {
     this.nextShown.add(id);

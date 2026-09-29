@@ -272,6 +272,7 @@ export function renderConnector(parentGroup: Group, options: ConnectorRenderOpti
     dataVersion,
     computedPoints,
     connector,
-    theme
+    theme,
+    containerTransform: null
   };
 }

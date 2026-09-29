@@ -1,16 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import {
-  resolveNodeAncestryChain,
-  compareHierarchicalNodes,
-  resolveConnectorLayerAnchor,
+  resolveConnectorLayerPlacement,
   compareContentLayerEntries,
   type ContentLayerOrderEntry
 } from '../src/layering/content-layer-order';
 
-function createMockNode(params: { id: string; zIndex?: string; parentId?: string }): NodeEntity {
+function node(id: string, zIndex: string, parentId?: string): NodeEntity {
   return {
-    id: params.id,
+    id,
     type: 'node',
     nodeType: 'custom',
     x: 0,
@@ -18,191 +16,146 @@ function createMockNode(params: { id: string; zIndex?: string; parentId?: string
     width: 100,
     height: 100,
     rotation: 0,
-    zIndex: params.zIndex ?? 'a1',
-    parentId: params.parentId,
+    zIndex,
+    parentId,
     locked: false
   };
 }
 
-function createMockConnector(params: { id: string; fromId?: string; toId?: string; zIndex?: string }): ConnectorEntity {
+function connector(id: string, fromId?: string, toId?: string, zIndex = 'a1'): ConnectorEntity {
   return {
-    id: params.id,
+    id,
     type: 'connector',
     connectorType: 'straight',
-    from: { nodeId: params.fromId },
-    to: { nodeId: params.toId },
-    zIndex: params.zIndex ?? 'a1',
+    from: { nodeId: fromId },
+    to: { nodeId: toId },
+    zIndex,
     locked: false
   };
 }
 
-describe('ContentLayerOrder 场景树层级拓扑排序', () => {
-  it('resolveNodeAncestryChain 正确求解祖先链并防御环状引用', () => {
-    const root = createMockNode({ id: 'root', zIndex: 'a1' });
-    const container = createMockNode({ id: 'container', parentId: 'root', zIndex: 'a1' });
-    const child = createMockNode({ id: 'child', parentId: 'container', zIndex: 'a1' });
+/**
+ * 根层级：A(a1)、frame(a2)；frame 内：B(a1)、C(a2)、inner(a3)；inner 内：D(a1)
+ */
+function createScene() {
+  const nodes = new Map<string, NodeEntity>(
+    [
+      node('A', 'a1'),
+      node('frame', 'a2'),
+      node('B', 'a1', 'frame'),
+      node('C', 'a2', 'frame'),
+      node('inner', 'a3', 'frame'),
+      node('D', 'a1', 'inner')
+    ].map((n) => [n.id, n])
+  );
+  return { nodes, getNode: (id: string) => nodes.get(id) };
+}
 
-    const nodes = new Map<string, NodeEntity>([
-      ['root', root],
-      ['container', container],
-      ['child', child]
-    ]);
-
-    const chain = resolveNodeAncestryChain(child, (id) => nodes.get(id));
-    expect(chain.map((n) => n.id)).toEqual(['root', 'container', 'child']);
-
-    // 环状防御测试
-    const loopA = createMockNode({ id: 'loopA', parentId: 'loopB', zIndex: 'a1' });
-    const loopB = createMockNode({ id: 'loopB', parentId: 'loopA', zIndex: 'a1' });
-    const loopNodes = new Map<string, NodeEntity>([
-      ['loopA', loopA],
-      ['loopB', loopB]
-    ]);
-
-    expect(() => {
-      resolveNodeAncestryChain(loopA, (id) => loopNodes.get(id));
-    }).not.toThrow();
+describe('resolveConnectorLayerPlacement 连线挂载位置 (ADR-114)', () => {
+  it('两端同在一个容器内：挂在该容器，紧贴较高一端下方', () => {
+    const { getNode } = createScene();
+    const placement = resolveConnectorLayerPlacement(connector('c', 'B', 'C'), getNode);
+    expect(placement.containerId).toBe('frame');
+    expect(placement.anchorNode!.id).toBe('C');
+    expect(placement.placement).toBe('below');
   });
 
-  it('compareHierarchicalNodes 确保父容器在底、子节点在顶', () => {
-    const container = createMockNode({ id: 'frame1', zIndex: 'a1' });
-    const child = createMockNode({ id: 'card1', parentId: 'frame1', zIndex: 'a1' });
+  it('跨容器：挂在公共祖先容器，较高一端嵌套在子容器里时紧贴该子容器上方', () => {
+    const { getNode } = createScene();
+    const placement = resolveConnectorLayerPlacement(connector('c', 'A', 'B'), getNode);
+    expect(placement.containerId).toBeUndefined();
+    expect(placement.anchorNode!.id).toBe('frame');
+    expect(placement.placement).toBe('above');
 
-    const nodes = new Map<string, NodeEntity>([
-      ['frame1', container],
-      ['card1', child]
-    ]);
+    // 较高一端直接位于公共容器时仍紧贴其下方
+    const nested = resolveConnectorLayerPlacement(connector('c', 'D', 'C'), getNode);
+    expect(nested.containerId).toBe('frame');
+    expect(nested.anchorNode!.id).toBe('inner');
+    expect(nested.placement).toBe('above');
 
-    // 父容器 < 子节点 (容器在下方)
-    expect(compareHierarchicalNodes(container, child, (id) => nodes.get(id))).toBeLessThan(0);
-    expect(compareHierarchicalNodes(child, container, (id) => nodes.get(id))).toBeGreaterThan(0);
+    const direct = resolveConnectorLayerPlacement(connector('c', 'D', 'B'), getNode);
+    expect(direct.anchorNode!.id).toBe('inner');
   });
 
-  it('resolveConnectorLayerAnchor 求解连线的伴生锚点 (选取层级更高者)', () => {
-    const frame = createMockNode({ id: 'frame', zIndex: 'a1' });
-    const innerCard = createMockNode({ id: 'innerCard', parentId: 'frame', zIndex: 'a1' });
-    const outsideCard = createMockNode({ id: 'outsideCard', zIndex: 'a2' });
-
-    const nodes = new Map<string, NodeEntity>([
-      ['frame', frame],
-      ['innerCard', innerCard],
-      ['outsideCard', outsideCard]
-    ]);
-
-    const getNode = (id?: string) => (id ? nodes.get(id) : undefined);
-    const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
-
-    // 跨画框连线：outsideCard (zIndex 2) 比 frame (zIndex 1) 树分叉处更高
-    const conn1 = createMockConnector({ id: 'c1', fromId: 'innerCard', toId: 'outsideCard' });
-    const anchor = resolveConnectorLayerAnchor(conn1, getNode, compareNodes);
-    expect(anchor?.id).toBe('outsideCard');
-
-    // 悬空连线：只有一端连接节点
-    const connDangling = createMockConnector({ id: 'cDangling', fromId: 'innerCard' });
-    expect(resolveConnectorLayerAnchor(connDangling, getNode, compareNodes)?.id).toBe('innerCard');
+  it('较高一端直接位于公共容器：紧贴其下方', () => {
+    const { nodes, getNode } = createScene();
+    nodes.set('A', node('A', 'a9'));
+    const placement = resolveConnectorLayerPlacement(connector('c', 'A', 'B'), getNode);
+    expect(placement.anchorNode!.id).toBe('A');
+    expect(placement.placement).toBe('below');
   });
 
-  it('综合拓扑排序：容器内连线高于容器背景、低于内部子节点', () => {
-    const frame = createMockNode({ id: 'frame', zIndex: 'a1' });
-    const cardA = createMockNode({ id: 'cardA', parentId: 'frame', zIndex: 'a1' });
-    const cardB = createMockNode({ id: 'cardB', parentId: 'frame', zIndex: 'a2' });
-    const innerConn = createMockConnector({ id: 'innerConn', fromId: 'cardA', toId: 'cardB', zIndex: 'a1' });
+  it('一端是另一端的祖先：挂在该祖先内部，锚定另一端在其中的代表兄弟', () => {
+    const { getNode } = createScene();
+    const child = resolveConnectorLayerPlacement(connector('c', 'frame', 'C'), getNode);
+    expect(child.containerId).toBe('frame');
+    expect(child.anchorNode!.id).toBe('C');
+    expect(child.placement).toBe('below');
 
-    const nodes = new Map<string, NodeEntity>([
-      ['frame', frame],
-      ['cardA', cardA],
-      ['cardB', cardB]
-    ]);
-    const getNode = (id?: string) => (id ? nodes.get(id) : undefined);
-    const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
+    const grandchild = resolveConnectorLayerPlacement(connector('c', 'D', 'frame'), getNode);
+    expect(grandchild.containerId).toBe('frame');
+    expect(grandchild.anchorNode!.id).toBe('inner');
+    expect(grandchild.placement).toBe('above');
+  });
 
+  it('只绑定一端、自环与两端悬空', () => {
+    const { getNode } = createScene();
+    expect(resolveConnectorLayerPlacement(connector('c', 'D'), getNode)).toMatchObject({
+      containerId: 'inner',
+      placement: 'below'
+    });
+    expect(resolveConnectorLayerPlacement(connector('c', 'B', 'B'), getNode).containerId).toBe('frame');
+    expect(resolveConnectorLayerPlacement(connector('c', 'missing'), getNode)).toEqual({
+      containerId: undefined,
+      anchorNode: null,
+      placement: 'below'
+    });
+  });
+});
+
+describe('compareContentLayerEntries 容器内排序', () => {
+  it('同一锚点：下方连线 < 节点 < 上方连线，同侧多条连线按自身索引', () => {
+    const anchor = node('X', 'a5');
+    const other = node('Y', 'a6');
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardB, group: null },
+      { kind: 'node', node: other, group: null },
+      { kind: 'connector', connector: connector('above', 'X'), group: null, anchorNode: anchor, placement: 'above' },
+      { kind: 'node', node: anchor, group: null },
       {
         kind: 'connector',
-        connector: innerConn,
+        connector: connector('below2', 'X', undefined, 'a2'),
         group: null,
-        anchorNode: resolveConnectorLayerAnchor(innerConn, getNode, compareNodes)
+        anchorNode: anchor,
+        placement: 'below'
       },
-      { kind: 'node', node: frame, group: null },
-      { kind: 'node', node: cardA, group: null }
-    ];
-
-    entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
-
-    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
-    // 预期顺序：frame (背景在最底) -> cardA -> innerConn (伴生于高层 cardB 紧下方) -> cardB (顶层卡片)
-    expect(resultIds).toEqual(['frame', 'cardA', 'innerConn', 'cardB']);
-  });
-
-  it('跨画框连线穿透：高于低层容器背景，伴随高层容器子节点且在卡片下方', () => {
-    const frameA = createMockNode({ id: 'frameA', zIndex: 'a1' });
-    const cardInA = createMockNode({ id: 'cardInA', parentId: 'frameA', zIndex: 'a1' });
-
-    const frameB = createMockNode({ id: 'frameB', zIndex: 'a2' });
-    const cardInB = createMockNode({ id: 'cardInB', parentId: 'frameB', zIndex: 'a1' });
-
-    const crossConn = createMockConnector({ id: 'crossConn', fromId: 'cardInA', toId: 'cardInB', zIndex: 'a1' });
-
-    const nodes = new Map<string, NodeEntity>([
-      ['frameA', frameA],
-      ['cardInA', cardInA],
-      ['frameB', frameB],
-      ['cardInB', cardInB]
-    ]);
-    const getNode = (id?: string) => (id ? nodes.get(id) : undefined);
-    const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
-
-    const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardInB, group: null },
-      { kind: 'node', node: frameB, group: null },
       {
         kind: 'connector',
-        connector: crossConn,
+        connector: connector('below1', 'X', undefined, 'a1'),
         group: null,
-        anchorNode: resolveConnectorLayerAnchor(crossConn, getNode, compareNodes)
-      },
-      { kind: 'node', node: cardInA, group: null },
-      { kind: 'node', node: frameA, group: null }
+        anchorNode: anchor,
+        placement: 'below'
+      }
     ];
-
-    entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
-
-    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
-    // frameA -> cardInA -> frameB -> crossConn (在 cardInB 紧下方) -> cardInB
-    expect(resultIds).toEqual(['frameA', 'cardInA', 'frameB', 'crossConn', 'cardInB']);
+    const order = [...entries]
+      .sort(compareContentLayerEntries)
+      .map((entry) => (entry.kind === 'node' ? entry.node.id : entry.connector.id));
+    expect(order).toEqual(['below1', 'below2', 'X', 'above', 'Y']);
   });
 
-  it('同分兄弟节点按 id 决胜，伴生连线紧贴宿主节点下方', () => {
-    // 兄弟卡片 A 与 B (zIndex 均为 1，且同属于 root)
-    const cardA = createMockNode({ id: 'cardA', zIndex: 'a1' });
-    const cardB = createMockNode({ id: 'cardB', zIndex: 'a1' });
-    // 连线 connB 伴随 cardB
-    const connB = createMockConnector({ id: 'connB', fromId: 'cardB', zIndex: 'a1' });
-
-    const nodes = new Map<string, NodeEntity>([
-      ['cardA', cardA],
-      ['cardB', cardB]
-    ]);
-    const getNode = (id?: string) => (id ? nodes.get(id) : undefined);
-    const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
-
-    // 输入顺序：cardA (0) -> connB (1) -> cardB (2)
+  it('悬空连线以自身索引与节点交错排序', () => {
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardB, group: null },
+      { kind: 'node', node: node('N', 'a5'), group: null },
       {
         kind: 'connector',
-        connector: connB,
+        connector: connector('dangling', undefined, undefined, 'a3'),
         group: null,
-        anchorNode: cardB
-      },
-      { kind: 'node', node: cardA, group: null }
+        anchorNode: null,
+        placement: 'below'
+      }
     ];
-
-    entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
-
-    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
-    // 严格满足：cardA -> connB (紧贴 cardB 下方) -> cardB
-    expect(resultIds).toEqual(['cardA', 'connB', 'cardB']);
+    const order = [...entries]
+      .sort(compareContentLayerEntries)
+      .map((entry) => (entry.kind === 'node' ? entry.node.id : entry.connector.id));
+    expect(order).toEqual(['dangling', 'N']);
   });
 });

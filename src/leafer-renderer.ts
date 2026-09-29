@@ -15,7 +15,7 @@
 
 import { Leafer, Group } from 'leafer';
 import type { SkyNoteEngine, NodeEntity, ConnectorEntity, Point, RectBounds, CanvasWheelEvent } from '@skynote/core';
-import { isPointInNode } from '@skynote/core';
+import { compareHierarchicalNodes, isPointInNode } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext, HitEntityResult } from './types';
 import {
   screenToWorld,
@@ -35,7 +35,6 @@ import {
   type SkyNoteLodLevel,
   type SkyNoteAdaptiveLodState
 } from './scheduler/adaptive-lod';
-import { compareHierarchicalNodes } from './layering/content-layer-order';
 import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
 import { ContentOrderSync } from './layers/content-order-sync';
@@ -142,17 +141,11 @@ export class LeaferRenderer {
       offscreenCacheLimit: this.offscreenCacheLimit
     });
     this.connectorLayer = new ConnectorLayer({
-      contentLayer: this.contentLayer,
       engine: this.engine,
       offscreenCacheLimit: this.offscreenCacheLimit
     });
 
-    this.contentOrder = new ContentOrderSync(
-      this.contentLayer,
-      this.nodeLayer,
-      this.connectorLayer,
-      this.engine.entityStore
-    );
+    this.contentOrder = new ContentOrderSync(this.nodeLayer, this.connectorLayer, this.engine.entityStore);
 
     // 3. 宿主事件网桥与交互态感知
     this.hostBridge = new DOMHostBridge({
@@ -250,8 +243,8 @@ export class LeaferRenderer {
    * 开销只与视锥内实体数和本帧删除数相关，与画布总规模无关
    */
   renderFrame(): void {
-    const { nodeLayer, connectorLayer, contentOrder } = this;
-    if (this.isDestroyed || !nodeLayer || !connectorLayer || !contentOrder) return;
+    const { contentLayer, nodeLayer, connectorLayer, contentOrder } = this;
+    if (this.isDestroyed || !contentLayer || !nodeLayer || !connectorLayer || !contentOrder) return;
     if (this.scheduledRafId !== null) {
       cancelAnimationFrame(this.scheduledRafId);
       this.scheduledRafId = null;
@@ -305,6 +298,15 @@ export class LeaferRenderer {
     });
 
     // 5. 节点与连线图层增量同步，有实体新进入场景时需为其定位层级
+    // 连线挂在公共祖先容器中 (ADR-114)，所需容器即使不在视锥内也要先由节点图层挂载
+    if (this.layerOrderInvalidated) connectorLayer.invalidatePlacements();
+    const connectorContainerIds = new Set<string>();
+    for (let i = 0; i < visibleConnectorIds.length; i++) {
+      const connectorId = visibleConnectorIds[i];
+      if (!frameResult.committedConnectorIds.has(connectorId)) continue;
+      const containerId = connectorLayer.getPlacement(connectorId)?.containerId;
+      if (containerId !== undefined) connectorContainerIds.add(containerId);
+    }
     const context: LeaferRenderContext = {
       viewport,
       isInteracting: this.isInteracting,
@@ -314,19 +316,22 @@ export class LeaferRenderer {
       visibleNodeIds,
       (id) => frameResult.committedNodeIds.has(id),
       context,
-      lodState.level === 'full' ? 'full' : 'placeholder'
+      lodState.level === 'full' ? 'full' : 'placeholder',
+      connectorContainerIds
     );
     const connectorSync = connectorLayer.sync(
       visibleConnectorIds,
       (id) => frameResult.committedConnectorIds.has(id),
-      session.theme
+      session.theme,
+      (containerId) => (containerId === undefined ? contentLayer : nodeLayer.getChildrenContainer(containerId)!)
     );
     // 以实测挂载成本校准分帧调度器，慢设备自动缩小每帧提交量，快设备减少不必要的分帧
     this.frameScheduler.recordNodePhase(nodeSync.enterMs, nodeSync.entered);
     this.frameScheduler.recordConnectorPhase(connectorSync.enterMs, connectorSync.entered);
 
-    // 6. 层级同步：文档层级变化时全量排序并最少移动，否则只插入新挂载的实体
-    if (this.layerOrderInvalidated || nodeSync.entered > 0 || connectorSync.entered > 0) {
+    // 6. 层级同步：文档层级变化时全量排序并最少移动，否则剔除离场实体、插入新挂载的实体
+    const mountChanged = nodeSync.entered + nodeSync.left + connectorSync.entered + connectorSync.left > 0;
+    if (this.layerOrderInvalidated || mountChanged) {
       contentOrder.sync(this.layerOrderInvalidated);
       this.layerOrderInvalidated = false;
     }
@@ -340,25 +345,30 @@ export class LeaferRenderer {
 
   /**
    * 节点空间碰撞拾取：在命中候选中按层级规则取最上层者 (忽略不可见节点)
-   * 空间索引按外接矩形粗筛，旋转节点须按实际框精判；返回顺序与层叠无关，必须显式比较层级
+   * 空间索引按外接矩形粗筛，再按世界矩阵精判 (含自身与祖先旋转)；落在裁剪型祖先 (画框) 之外的部分不可拾取；
+   * 候选返回顺序与层叠无关，必须显式比较层级
    */
   hitTest(point: Point): NodeEntity | undefined {
-    const entityStore = this.engine.entityStore;
+    const { entityStore, nodeTypes } = this.engine;
     const chainCache = new Map<string, NodeEntity[]>();
     const getNode = (id: string) => entityStore.getNode(id)?.entity;
+    const containsPoint = (node: NodeEntity) => isPointInNode(point, node, entityStore.getWorldTransform(node.id)!);
+    const isClippedOut = (node: NodeEntity): boolean => {
+      for (let parent = node.parentId === undefined ? undefined : getNode(node.parentId); parent;) {
+        if (nodeTypes.get(parent.nodeType)?.clipChildren && !containsPoint(parent)) return true;
+        parent = parent.parentId === undefined ? undefined : getNode(parent.parentId);
+      }
+      return false;
+    };
 
     let top: NodeEntity | undefined;
     const candidateIds = this.engine.spatialIndex.hitTest(point);
     for (let i = 0; i < candidateIds.length; i++) {
       const node = getNode(candidateIds[i]);
-      if (!node || node.style?.opacity === 0 || !isPointInNode(point, node)) continue;
-      if (!top) {
-        top = node;
-        continue;
-      }
-      if (compareHierarchicalNodes(node, top, getNode, chainCache) > 0) {
-        top = node;
-      }
+      if (!node || node.style?.opacity === 0 || !containsPoint(node)) continue;
+      if (top && compareHierarchicalNodes(node, top, getNode, chainCache) < 0) continue;
+      if (isClippedOut(node)) continue;
+      top = node;
     }
     return top;
   }

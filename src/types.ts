@@ -7,7 +7,7 @@
  * 2. 干净纯粹：严禁未被实际使用的幽灵字段 (如 lifecycleCustomData)。
  */
 
-import type { NodeEntity, ConnectorEntity, Point, CanvasTheme, ComputedRoute } from '@skynote/core';
+import type { NodeEntity, ConnectorEntity, Point, CanvasTheme, ComputedRoute, Matrix2D } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 import type { ViewportState } from './viewport/viewport-transform';
 
@@ -31,6 +31,11 @@ export interface LayerSyncResult {
   entered: number;
   /** 渲染新进入实体的累计耗时，回传分帧调度器校准单个实体的挂载成本 */
   enterMs: number;
+  /**
+   * 离开场景的实体数：层级同步必须在同一帧把它们从有序列表中剔除，
+   * 否则之后重新进入时会被误认为仍在原位 (实际已被追加到容器末尾)
+   */
+  left: number;
 }
 
 /** 渲染器构造选项 */
@@ -66,6 +71,8 @@ export interface NodeRenderCache {
   shapes: LeaferShape[];
   /** 最近一次渲染的节点实体 (卸载时据其 nodeType 寻址原生渲染器，并作为 destroy 的入参) */
   node: NodeEntity;
+  /** 子节点与容器内连线的挂载容器 (按需创建；裁剪型节点为 overflow: 'hide' 的 Box) */
+  childrenContainer: Group | null;
 }
 
 /** 连线渲染图元缓存项 */
@@ -84,6 +91,8 @@ export interface ConnectorRenderCache {
   connector: ConnectorEntity;
   /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */
   theme: CanvasTheme;
+  /** 挂载容器的世界矩阵 (按引用比较)；连线图元以其逆矩阵抵消容器变换，路由点保持世界坐标 */
+  containerTransform: Matrix2D | null;
 }
 
 /** 顶层瞬态图元渲染会话 */
