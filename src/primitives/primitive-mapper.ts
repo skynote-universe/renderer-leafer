@@ -1,7 +1,7 @@
 /**
  * @file primitive-mapper.ts
  * @description 声明式跨引擎中间图元 (CanvasPrimitive) 到 Leafer 图元的高性能映射与就地复用器
- * 
+ *
  * 遵守 AGENTS.md 性能军规：
  * 1. 就地复用：更新阶段优先修改已有图元属性，严禁反复 new Rect() 触发 GC 掉帧；
  * 2. 物理像素对齐：对 1px 细线进行 DPR 栅格对齐；
@@ -75,9 +75,7 @@ function toLeaferTextWrap(wrap?: TextWrap): 'normal' | 'none' | 'break' | undefi
 /**
  * 转换文本装饰线 (下划线/删除线) 到 Leafer (支持单值与多选数组)
  */
-function toLeaferTextDecoration(
-  decoration?: TextDecoration
-): 'none' | 'under' | 'delete' | 'under-delete' | undefined {
+function toLeaferTextDecoration(decoration?: TextDecoration): 'none' | 'under' | 'delete' | 'under-delete' | undefined {
   if (!decoration || decoration === 'none') return 'none';
   const lines = Array.isArray(decoration) ? decoration : [decoration];
   const hasUnderline = lines.includes('underline');
@@ -131,11 +129,7 @@ export function createLeaferShapeFromPrimitive(primitive: CanvasPrimitive, dpr =
 /**
  * 就地更新已有 Leafer 图元属性 (In-place Mutation)
  */
-export function updateLeaferShapeInPlace(
-  shape: LeaferShape,
-  primitive: CanvasPrimitive,
-  dpr = 1
-): boolean {
+export function updateLeaferShapeInPlace(shape: LeaferShape, primitive: CanvasPrimitive, dpr = 1): boolean {
   switch (primitive.kind) {
     case 'rect':
       if (!(shape instanceof Rect)) return false;
@@ -478,7 +472,7 @@ function createGroupShape(p: GroupPrimitive, dpr: number): Group {
     opacity: p.opacity
   });
   if (p.children && p.children.length > 0) {
-    p.children.forEach(child => {
+    p.children.forEach((child) => {
       group.add(createLeaferShapeFromPrimitive(child, dpr));
     });
   }
@@ -511,7 +505,7 @@ function createBoxShape(p: BoxPrimitive, dpr: number): Box {
     opacity: p.opacity
   });
   if (p.children && p.children.length > 0) {
-    p.children.forEach(child => {
+    p.children.forEach((child) => {
       box.add(createLeaferShapeFromPrimitive(child, dpr));
     });
   }

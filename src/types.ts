@@ -1,19 +1,13 @@
 /**
  * @file types.ts
  * @description LeaferJS 渲染适配器类型定义
- * 
+ *
  * 遵守 AGENTS.md 准则：
  * 1. 单一事实源：杜绝能在已有字段推导出的冗余属性 (如 zoom)；
  * 2. 干净纯粹：严禁未被实际使用的幽灵字段 (如 lifecycleCustomData)。
  */
 
-import type {
-  NodeEntity,
-  ConnectorEntity,
-  Point,
-  CanvasTheme,
-  ComputedRoute
-} from '@skynote/core';
+import type { NodeEntity, ConnectorEntity, Point, CanvasTheme, ComputedRoute } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 import type { ViewportState } from './viewport/viewport-transform';
 

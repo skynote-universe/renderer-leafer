@@ -1,7 +1,7 @@
 /**
  * @file ephemeral-channel.ts
  * @description GPU 顶层瞬态图元渲染通道 (Ephemeral Channel)
- * 
+ *
  * 设计考量 (Why):
  * 1. 0 DOM 残留：框选蚂蚁线、吸附对齐参考线、临时拖拽幽灵框，统一走此 GPU 顶层通道，彻底淘汰 DOM div；
  * 2. 自动兜底守护：支持按会话隔离 (sessionId)，失焦、Esc 或操作结束时自动一键清空，根绝幽灵残留；
@@ -44,12 +44,7 @@ export class EphemeralChannel {
     }
 
     // 就地复用图元更新
-    session.shapes = reconcileLeaferShapes(
-      this.containerGroup,
-      session.shapes,
-      primitives,
-      this.dpr
-    );
+    session.shapes = reconcileLeaferShapes(this.containerGroup, session.shapes, primitives, this.dpr);
   }
 
   /**
@@ -58,7 +53,7 @@ export class EphemeralChannel {
   clearSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (session) {
-      session.shapes.forEach(shape => shape.remove());
+      session.shapes.forEach((shape) => shape.remove());
       this.sessions.delete(sessionId);
     }
   }
@@ -67,8 +62,8 @@ export class EphemeralChannel {
    * 兜底守护：一键清空所有会话与图元 (通常在 Esc、失去焦点或画布销毁时触发)
    */
   clearAll(): void {
-    this.sessions.forEach(session => {
-      session.shapes.forEach(shape => shape.remove());
+    this.sessions.forEach((session) => {
+      session.shapes.forEach((shape) => shape.remove());
     });
     this.sessions.clear();
   }

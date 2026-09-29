@@ -1,7 +1,7 @@
 /**
  * @file connector-renderer.ts
  * @description 连线与端点标记原生渲染器 (ConnectorRenderer)
- * 
+ *
  * 遵守核心架构分层与性能军规：
  * 1. 路由由 core 引擎统一求解 (engine.getConnectorRoute)，本文件只负责绘制，箭头定义来自 ArrowMarkerRegistry；
  * 2. 引用守卫 (Fast Path)：路由对象、数据版本与主题均未变化时直接复用缓存，0 运算 0 GC；
@@ -70,10 +70,7 @@ function resolveMarkerFill(
 /**
  * 创建或就地更新连线图元与端点箭头
  */
-export function renderConnector(
-  parentGroup: Group,
-  options: ConnectorRenderOptions
-): ConnectorRenderCache {
+export function renderConnector(parentGroup: Group, options: ConnectorRenderOptions): ConnectorRenderCache {
   const { connector, route, dataVersion, arrowMarkers, existingCache, theme } = options;
 
   // 极速快慢分支 (Fast Path)：路由、属性与主题均未变化时直接复用已有图元

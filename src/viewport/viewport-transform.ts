@@ -1,7 +1,7 @@
 /**
  * @file viewport-transform.ts
  * @description 视口坐标双向变换纯函数与像素对齐工具
- * 
+ *
  * 遵守 AGENTS.md 准则：
  * 1. 纯函数设计：严禁就地篡改入参对象，必须返回新对象；
  * 2. 渲染端物理像素对齐：按设备像素比 DPR 做整数化对齐，确保线条像刀锋般锐利。
@@ -39,11 +39,7 @@ export function worldToScreen(worldPoint: Point, viewport: ViewportState): Point
 /**
  * 计算当前视口在世界逻辑坐标系下的可视包围盒 (AABB)
  */
-export function getViewportWorldBounds(
-  viewport: ViewportState,
-  viewWidth: number,
-  viewHeight: number
-): RectBounds {
+export function getViewportWorldBounds(viewport: ViewportState, viewWidth: number, viewHeight: number): RectBounds {
   const topLeft = screenToWorld({ x: 0, y: 0 }, viewport);
   const bottomRight = screenToWorld({ x: viewWidth, y: viewHeight }, viewport);
   const width = bottomRight.x - topLeft.x;
@@ -121,4 +117,3 @@ export function distanceToPolyline(point: Point, points: readonly Point[]): numb
 
   return minDistance;
 }
-

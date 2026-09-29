@@ -64,7 +64,14 @@ describe('渲染帧开销 (10k 节点，约 1700 个可见)', () => {
 
   it('全选 / 取消全选：选中态不触发节点内容重建', () => {
     const { engine, renderer } = createScene();
-    const visibleIds = engine.spatialIndex.search({ left: 0, top: 0, right: 1250, bottom: 1000, width: 1250, height: 1000 });
+    const visibleIds = engine.spatialIndex.search({
+      left: 0,
+      top: 0,
+      right: 1250,
+      bottom: 1000,
+      width: 1250,
+      height: 1000
+    });
     const frame = averageFrame((i) => {
       engine.session.setSelection({ nodeIds: i % 2 === 0 ? visibleIds : [] });
       renderer.renderFrame();

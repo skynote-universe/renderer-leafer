@@ -15,14 +15,23 @@ if (typeof (globalThis as any).HTMLElement === 'undefined') {
     clientHeight = 600;
     children: any[] = [];
     childNodes: any[] = [];
-    hasChildNodes() { return false; }
-    appendChild(child: any) { this.children.push(child); return child; }
+    hasChildNodes() {
+      return false;
+    }
+    appendChild(child: any) {
+      this.children.push(child);
+      return child;
+    }
     removeChild() {}
     addEventListener() {}
     removeEventListener() {}
     setAttribute() {}
-    getAttribute() { return null; }
-    hasAttribute() { return false; }
+    getAttribute() {
+      return null;
+    }
+    hasAttribute() {
+      return false;
+    }
     focus() {}
   };
 }

@@ -19,7 +19,9 @@ function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
 
 /** 读取内容层中第 index 个节点的首个图元 */
 function firstShapeOf(renderer: LeaferRenderer, index: number): Record<string, unknown> {
-  const outerGroup = renderer.getContentLayer()!.children[index] as unknown as { children: { children: Record<string, unknown>[] }[] };
+  const outerGroup = renderer.getContentLayer()!.children[index] as unknown as {
+    children: { children: Record<string, unknown>[] }[];
+  };
   return outerGroup.children[0].children[0];
 }
 

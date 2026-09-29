@@ -21,11 +21,7 @@ export interface LeaferConnectorRenderContext extends LeaferRenderContext {
 export interface LeaferConnectorLifecycleRenderer {
   readonly connectorType: string;
   create(connector: ConnectorEntity, context: LeaferConnectorRenderContext): LeaferShape[];
-  update(
-    shapes: LeaferShape[],
-    connector: ConnectorEntity,
-    context: LeaferConnectorRenderContext
-  ): void;
+  update(shapes: LeaferShape[], connector: ConnectorEntity, context: LeaferConnectorRenderContext): void;
   destroy?(shapes: LeaferShape[], connector: ConnectorEntity): void;
 }
 

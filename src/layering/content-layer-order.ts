@@ -1,7 +1,7 @@
 /**
  * @file content-layer-order.ts
  * @description 场景树内容层拓扑排序算法 (ContentLayerOrder)
- * 
+ *
  * 核心设计考量 (Why):
  * 1. 伴生锚定法则 (Anchor Node Hierarchy)：
  *    连线不设死板独立的全局孤立层，而是跟随其连接的两端节点中层级更高者伴生锚定；
@@ -75,11 +75,7 @@ export function compareHierarchicalNodes(
   const rightChain = getChain(right);
 
   let index = 0;
-  while (
-    index < leftChain.length &&
-    index < rightChain.length &&
-    leftChain[index].id === rightChain[index].id
-  ) {
+  while (index < leftChain.length && index < rightChain.length && leftChain[index].id === rightChain[index].id) {
     index += 1;
   }
 

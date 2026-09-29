@@ -1,7 +1,7 @@
 /**
  * @file host-bridge.ts
  * @description 宿主网关与输入事件桥接实现 (DOMHostBridge)
- * 
+ *
  * 遵守 AGENTS.md 准则：
  * 1. 平台中立边界：此文件为面向浏览器 DOM 容器的专用桥接器，Core 不感知具体 DOM；
  * 2. 坐标归一化：DOM 原生事件解算为视口与世界逻辑坐标，挂载 claimPointer 独占裁判；
@@ -28,7 +28,12 @@ import { screenToWorld, type ViewportState } from '../viewport/viewport-transfor
 function isEditableTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element || typeof element.tagName !== 'string') return false;
-  return element.isContentEditable || element.tagName === 'INPUT' || element.tagName === 'TEXTAREA' || element.tagName === 'SELECT';
+  return (
+    element.isContentEditable ||
+    element.tagName === 'INPUT' ||
+    element.tagName === 'TEXTAREA' ||
+    element.tagName === 'SELECT'
+  );
 }
 
 export interface HostBridgeOptions {
@@ -236,9 +241,7 @@ export class DOMHostBridge implements IHostBridge {
 
     const isZoom = e.ctrlKey || e.metaKey;
     const deltaZoom = isZoom ? -e.deltaY * 0.002 : 0;
-    const deltaPan: Point = isZoom
-      ? { x: 0, y: 0 }
-      : { x: -e.deltaX, y: -e.deltaY };
+    const deltaPan: Point = isZoom ? { x: 0, y: 0 } : { x: -e.deltaX, y: -e.deltaY };
 
     const wheelEvent: CanvasWheelEvent = {
       centerPoint,

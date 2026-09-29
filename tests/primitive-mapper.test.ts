@@ -64,11 +64,8 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
 const { Group, Rect, Text, Box } = await import('leafer');
 type TextShape = InstanceType<typeof Text>;
 type RectShape = InstanceType<typeof Rect>;
-const {
-  createLeaferShapeFromPrimitive,
-  updateLeaferShapeInPlace,
-  reconcileLeaferShapes
-} = await import('../src/primitives/primitive-mapper');
+const { createLeaferShapeFromPrimitive, updateLeaferShapeInPlace, reconcileLeaferShapes } =
+  await import('../src/primitives/primitive-mapper');
 
 describe('Primitive Mapper', () => {
   it('正确将 CanvasPrimitive 创建为 Leafer 图元，并映射文本高级排版属性', () => {

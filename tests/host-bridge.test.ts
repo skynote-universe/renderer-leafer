@@ -101,7 +101,13 @@ describe('DOMHostBridge 高频指针事件', () => {
     expect(container.tabIndex).toBe(0);
 
     const keys: string[] = [];
-    engine.inputScopes.pushScope({ id: 'probe', priority: 0, onKeyDown: (e) => { keys.push(e.key); } });
+    engine.inputScopes.pushScope({
+      id: 'probe',
+      priority: 0,
+      onKeyDown: (e) => {
+        keys.push(e.key);
+      }
+    });
 
     fire('pointerdown', {});
     expect(container.focusCalls).toBe(1);
@@ -116,4 +122,3 @@ describe('DOMHostBridge 高频指针事件', () => {
     bridge.destroy();
   });
 });
-

@@ -39,7 +39,10 @@ describe('ContentOrderSync 增量层级同步', () => {
     const addRandomNode = () => {
       const id = `n${seq++}`;
       const parentCandidates = Object.keys(engine.getView().content.nodes);
-      const parentId = random() < 0.2 && parentCandidates.length > 0 ? parentCandidates[Math.floor(random() * parentCandidates.length)] : undefined;
+      const parentId =
+        random() < 0.2 && parentCandidates.length > 0
+          ? parentCandidates[Math.floor(random() * parentCandidates.length)]
+          : undefined;
       const node: NodeEntity = {
         id,
         type: 'node',

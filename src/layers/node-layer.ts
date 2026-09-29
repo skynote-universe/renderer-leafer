@@ -79,7 +79,13 @@ export class NodeLayer {
 
       const entering = !shown.has(nodeId);
       const start = entering ? performance.now() : 0;
-      this.renderOrUpdate(runtimeNode.entity, runtimeNode.runtime.geomVersion, runtimeNode.runtime.dataVersion, context, detail);
+      this.renderOrUpdate(
+        runtimeNode.entity,
+        runtimeNode.runtime.geomVersion,
+        runtimeNode.runtime.dataVersion,
+        context,
+        detail
+      );
       this.visibility.markShown(nodeId);
       if (entering) {
         result.enterMs += performance.now() - start;
@@ -137,11 +143,7 @@ export class NodeLayer {
 
       // 已崩溃降级的节点视同占位档位，只在数据或主题变化时重试
       const renderedDetail = cache.detail === 'broken' ? detail : cache.detail;
-      if (
-        cache.dataVersion === dataVersion &&
-        cache.theme === context.theme &&
-        renderedDetail === detail
-      ) {
+      if (cache.dataVersion === dataVersion && cache.theme === context.theme && renderedDetail === detail) {
         return;
       }
 

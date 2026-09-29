@@ -86,10 +86,7 @@ export class AdaptiveLodController {
   private lastPressureAt = Number.NEGATIVE_INFINITY;
   private state: SkyNoteAdaptiveLodState;
 
-  constructor(
-    options: Partial<AdaptiveLodOptions> = {},
-    deviceProfile: AdaptiveLodDeviceProfile = {}
-  ) {
+  constructor(options: Partial<AdaptiveLodOptions> = {}, deviceProfile: AdaptiveLodDeviceProfile = {}) {
     this.options = normalizeOptions(options);
     this.deviceTier = resolveDeviceTier(deviceProfile);
     this.capacityScale = this.deviceTier === 'low' ? 0.7 : this.deviceTier === 'high' ? 1.2 : 1;
@@ -113,7 +110,7 @@ export class AdaptiveLodController {
 
   evaluate(input: AdaptiveLodInput): SkyNoteAdaptiveLodState {
     this.pruneSamples(input.now);
-    const renderP95Ms = percentile95(this.samples.map(sample => sample.duration));
+    const renderP95Ms = percentile95(this.samples.map((sample) => sample.duration));
     const decision = this.resolveDesiredLevel(input, renderP95Ms);
 
     if (LEVEL_VALUE[decision.level] >= LEVEL_VALUE[this.level]) {
@@ -160,8 +157,7 @@ export class AdaptiveLodController {
       }
       reasons.push(reason);
     };
-    const scaled = (value: number) =>
-      Math.max(1, Math.floor(value * (this.options.enabled ? this.capacityScale : 1)));
+    const scaled = (value: number) => Math.max(1, Math.floor(value * (this.options.enabled ? this.capacityScale : 1)));
 
     if (input.zoom < 0.12) promote('minimal', 'very-low-zoom');
     // 06 号设计文档约定：缩放低于 30% 时卡片内容已不可读，停止排版改绘占位块
@@ -197,10 +193,7 @@ export class AdaptiveLodController {
       } else if (renderP95Ms >= this.options.reducedRenderP95Ms) {
         promote('reduced', 'render-time-pressure');
       }
-      if (
-        input.isInteracting &&
-        (input.documentNodes >= 5_000 || input.documentConnectors >= 3_000)
-      ) {
+      if (input.isInteracting && (input.documentNodes >= 5_000 || input.documentConnectors >= 3_000)) {
         promote('reduced', 'active-interaction');
       }
       if (input.isInteracting && renderP95Ms >= 20) {
@@ -244,11 +237,7 @@ function resolveDeviceTier(profile: AdaptiveLodDeviceProfile): SkyNoteDeviceTier
   if ((cores !== null && cores <= 4) || (memory !== null && memory <= 4)) {
     return 'low';
   }
-  if (
-    (cores !== null || memory !== null) &&
-    (cores === null || cores >= 12) &&
-    (memory === null || memory >= 12)
-  ) {
+  if ((cores !== null || memory !== null) && (cores === null || cores >= 12) && (memory === null || memory >= 12)) {
     return 'high';
   }
   return 'standard';

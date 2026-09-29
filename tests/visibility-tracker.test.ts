@@ -10,7 +10,10 @@ function runFrame(tracker: VisibilityTracker, visible: string[]) {
     if (!tracker.shownIds.has(id)) entered.push(id);
     tracker.markShown(id);
   }
-  tracker.endFrame((id) => hidden.push(id), (id) => evicted.push(id));
+  tracker.endFrame(
+    (id) => hidden.push(id),
+    (id) => evicted.push(id)
+  );
   return { entered, hidden, evicted };
 }
 

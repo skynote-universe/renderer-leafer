@@ -95,17 +95,9 @@ class CommitQueue {
     return changed;
   }
 
-  commit(
-    limit: number,
-    staged: boolean,
-    enabled: boolean,
-    maximumCount = this.pending.length
-  ): number {
+  commit(limit: number, staged: boolean, enabled: boolean, maximumCount = this.pending.length): number {
     const availableCount = Math.min(this.pending.length, maximumCount);
-    const count =
-      !enabled || !staged
-        ? availableCount
-        : Math.min(availableCount, Math.max(0, limit));
+    const count = !enabled || !staged ? availableCount : Math.min(availableCount, Math.max(0, limit));
     for (let index = 0; index < count; index += 1) {
       this.committed.add(this.pending[index]);
     }
@@ -118,10 +110,7 @@ class CommitQueue {
   }
 
   countPending(ids: ReadonlySet<string>): number {
-    return this.pending.reduce(
-      (count, id) => count + (ids.has(id) ? 1 : 0),
-      0
-    );
+    return this.pending.reduce((count, id) => count + (ids.has(id) ? 1 : 0), 0);
   }
 }
 
@@ -144,25 +133,15 @@ export class FrameCommitScheduler {
   }
 
   reconcileAndCommit(target: FrameCommitTarget): FrameCommitResult {
-    const nodesChanged = this.nodes.reconcile(
-      target.nodeIds,
-      target.nodePriorityIds
-    );
-    const connectorsChanged = this.connectors.reconcile(
-      target.connectorIds,
-      target.connectorPriorityIds
-    );
+    const nodesChanged = this.nodes.reconcile(target.nodeIds, target.nodePriorityIds);
+    const connectorsChanged = this.connectors.reconcile(target.connectorIds, target.connectorPriorityIds);
     const targetChanged = nodesChanged || connectorsChanged;
     if (targetChanged) this.revision += 1;
     if (nodesChanged) {
-      this.nodeStaged =
-        this.options.enabled &&
-        this.nodes.pendingCount > this.options.activationThreshold;
+      this.nodeStaged = this.options.enabled && this.nodes.pendingCount > this.options.activationThreshold;
     }
     if (connectorsChanged) {
-      this.connectorStaged =
-        this.options.enabled &&
-        this.connectors.pendingCount > this.options.activationThreshold;
+      this.connectorStaged = this.options.enabled && this.connectors.pendingCount > this.options.activationThreshold;
     }
 
     const nodeLimit = this.resolveLimit(
@@ -173,11 +152,7 @@ export class FrameCommitScheduler {
       this.options.frameBudgetMs * (1 - this.options.nodeBudgetRatio),
       this.estimatedConnectorMsPerItem
     );
-    const lastNodeBatch = this.nodes.commit(
-      nodeLimit,
-      this.nodeStaged,
-      this.options.enabled
-    );
+    const lastNodeBatch = this.nodes.commit(nodeLimit, this.nodeStaged, this.options.enabled);
     const connectorAllowance =
       this.nodes.pendingCount === 0
         ? this.connectors.pendingCount
@@ -199,27 +174,13 @@ export class FrameCommitScheduler {
   }
 
   recordNodePhase(durationMs: number, committedItems: number): void {
-    this.estimatedNodeMsPerItem = updateEstimate(
-      this.estimatedNodeMsPerItem,
-      durationMs,
-      committedItems
-    );
-    this.state = this.createState(
-      this.state.lastNodeBatch,
-      this.state.lastConnectorBatch
-    );
+    this.estimatedNodeMsPerItem = updateEstimate(this.estimatedNodeMsPerItem, durationMs, committedItems);
+    this.state = this.createState(this.state.lastNodeBatch, this.state.lastConnectorBatch);
   }
 
   recordConnectorPhase(durationMs: number, committedItems: number): void {
-    this.estimatedConnectorMsPerItem = updateEstimate(
-      this.estimatedConnectorMsPerItem,
-      durationMs,
-      committedItems
-    );
-    this.state = this.createState(
-      this.state.lastNodeBatch,
-      this.state.lastConnectorBatch
-    );
+    this.estimatedConnectorMsPerItem = updateEstimate(this.estimatedConnectorMsPerItem, durationMs, committedItems);
+    this.state = this.createState(this.state.lastNodeBatch, this.state.lastConnectorBatch);
   }
 
   getState(): SkyNoteFrameCommitState {
@@ -229,17 +190,11 @@ export class FrameCommitScheduler {
   private resolveLimit(budgetMs: number, estimateMs: number): number {
     return Math.max(
       this.options.minItemsPerFrame,
-      Math.min(
-        this.options.maxItemsPerFrame,
-        Math.floor(budgetMs / Math.max(0.001, estimateMs))
-      )
+      Math.min(this.options.maxItemsPerFrame, Math.floor(budgetMs / Math.max(0.001, estimateMs)))
     );
   }
 
-  private createState(
-    lastNodeBatch: number,
-    lastConnectorBatch: number
-  ): SkyNoteFrameCommitState {
+  private createState(lastNodeBatch: number, lastConnectorBatch: number): SkyNoteFrameCommitState {
     return {
       revision: this.revision,
       active: this.nodes.pendingCount > 0 || this.connectors.pendingCount > 0,
@@ -265,18 +220,11 @@ function normalizeOptions(options: Partial<FrameCommitOptions>): FrameCommitOpti
     minItemsPerFrame: positiveInteger(merged.minItemsPerFrame, 4),
     maxItemsPerFrame: positiveInteger(merged.maxItemsPerFrame, 500),
     initialNodeMsPerItem: positive(merged.initialNodeMsPerItem, 0.07),
-    initialConnectorMsPerItem: positive(
-      merged.initialConnectorMsPerItem,
-      0.025
-    )
+    initialConnectorMsPerItem: positive(merged.initialConnectorMsPerItem, 0.025)
   };
 }
 
-function updateEstimate(
-  current: number,
-  durationMs: number,
-  committedItems: number
-): number {
+function updateEstimate(current: number, durationMs: number, committedItems: number): number {
   if (!Number.isFinite(durationMs) || durationMs < 0 || committedItems <= 0) {
     return current;
   }

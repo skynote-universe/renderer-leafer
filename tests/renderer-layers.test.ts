@@ -103,4 +103,3 @@ describe('LeaferRenderer 场景树图层架构', () => {
     expect(engine.inputScopes.hasScope('renderer:ephemeral-escape')).toBe(false);
   });
 });
-

@@ -8,11 +8,7 @@ import {
   type ContentLayerOrderEntry
 } from '../src/layering/content-layer-order';
 
-function createMockNode(params: {
-  id: string;
-  zIndex?: string;
-  parentId?: string;
-}): NodeEntity {
+function createMockNode(params: { id: string; zIndex?: string; parentId?: string }): NodeEntity {
   return {
     id: params.id,
     type: 'node',
@@ -28,12 +24,7 @@ function createMockNode(params: {
   };
 }
 
-function createMockConnector(params: {
-  id: string;
-  fromId?: string;
-  toId?: string;
-  zIndex?: string;
-}): ConnectorEntity {
+function createMockConnector(params: { id: string; fromId?: string; toId?: string; zIndex?: string }): ConnectorEntity {
   return {
     id: params.id,
     type: 'connector',
@@ -57,8 +48,8 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
       ['child', child]
     ]);
 
-    const chain = resolveNodeAncestryChain(child, id => nodes.get(id));
-    expect(chain.map(n => n.id)).toEqual(['root', 'container', 'child']);
+    const chain = resolveNodeAncestryChain(child, (id) => nodes.get(id));
+    expect(chain.map((n) => n.id)).toEqual(['root', 'container', 'child']);
 
     // 环状防御测试
     const loopA = createMockNode({ id: 'loopA', parentId: 'loopB', zIndex: 'a1' });
@@ -69,7 +60,7 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     ]);
 
     expect(() => {
-      resolveNodeAncestryChain(loopA, id => loopNodes.get(id));
+      resolveNodeAncestryChain(loopA, (id) => loopNodes.get(id));
     }).not.toThrow();
   });
 
@@ -83,8 +74,8 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     ]);
 
     // 父容器 < 子节点 (容器在下方)
-    expect(compareHierarchicalNodes(container, child, id => nodes.get(id))).toBeLessThan(0);
-    expect(compareHierarchicalNodes(child, container, id => nodes.get(id))).toBeGreaterThan(0);
+    expect(compareHierarchicalNodes(container, child, (id) => nodes.get(id))).toBeLessThan(0);
+    expect(compareHierarchicalNodes(child, container, (id) => nodes.get(id))).toBeGreaterThan(0);
   });
 
   it('resolveConnectorLayerAnchor 求解连线的伴生锚点 (选取层级更高者)', () => {
@@ -139,7 +130,7 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
 
-    const resultIds = entries.map(e => e.kind === 'node' ? e.node.id : e.connector.id);
+    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
     // 预期顺序：frame (背景在最底) -> cardA -> innerConn (伴生于高层 cardB 紧下方) -> cardB (顶层卡片)
     expect(resultIds).toEqual(['frame', 'cardA', 'innerConn', 'cardB']);
   });
@@ -177,7 +168,7 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
 
-    const resultIds = entries.map(e => e.kind === 'node' ? e.node.id : e.connector.id);
+    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
     // frameA -> cardInA -> frameB -> crossConn (在 cardInB 紧下方) -> cardInB
     expect(resultIds).toEqual(['frameA', 'cardInA', 'frameB', 'crossConn', 'cardInB']);
   });
@@ -210,7 +201,7 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
 
-    const resultIds = entries.map(e => e.kind === 'node' ? e.node.id : e.connector.id);
+    const resultIds = entries.map((e) => (e.kind === 'node' ? e.node.id : e.connector.id));
     // 严格满足：cardA -> connB (紧贴 cardB 下方) -> cardB
     expect(resultIds).toEqual(['cardA', 'connB', 'cardB']);
   });

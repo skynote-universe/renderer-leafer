@@ -14,14 +14,7 @@
  */
 
 import { Leafer, Group } from 'leafer';
-import type {
-  SkyNoteEngine,
-  NodeEntity,
-  ConnectorEntity,
-  Point,
-  RectBounds,
-  CanvasWheelEvent
-} from '@skynote/core';
+import type { SkyNoteEngine, NodeEntity, ConnectorEntity, Point, RectBounds, CanvasWheelEvent } from '@skynote/core';
 import { isPointInNode } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext, HitEntityResult } from './types';
 import {
@@ -146,7 +139,12 @@ export class LeaferRenderer {
       offscreenCacheLimit: this.offscreenCacheLimit
     });
 
-    this.contentOrder = new ContentOrderSync(this.contentLayer, this.nodeLayer, this.connectorLayer, this.engine.entityStore);
+    this.contentOrder = new ContentOrderSync(
+      this.contentLayer,
+      this.nodeLayer,
+      this.connectorLayer,
+      this.engine.entityStore
+    );
 
     // 3. 宿主事件网桥与交互态感知
     this.hostBridge = new DOMHostBridge({

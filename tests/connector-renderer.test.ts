@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { ConnectorEntity } from '@skynote/core';
-import { ConnectorRouterRegistry, ArrowMarkerRegistry, deriveCanvasTheme, LIGHT_CANVAS_THEME_SEED, computeConnectorRoute } from '@skynote/core';
+import {
+  ConnectorRouterRegistry,
+  ArrowMarkerRegistry,
+  deriveCanvasTheme,
+  LIGHT_CANVAS_THEME_SEED,
+  computeConnectorRoute
+} from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 
 // 连线渲染需显式提供主题：未设置描边色时取 connectorStroke，空心箭头取画布底色

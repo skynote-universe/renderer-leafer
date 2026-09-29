@@ -63,7 +63,8 @@ export class ContentOrderSync {
   sync(fullResort: boolean): void {
     const chainCache = new Map<string, NodeEntity[]>();
     const getNode = (id: string) => this.entityStore.getNode(id)?.entity;
-    const compareNodes = (left: NodeEntity, right: NodeEntity) => compareHierarchicalNodes(left, right, getNode, chainCache);
+    const compareNodes = (left: NodeEntity, right: NodeEntity) =>
+      compareHierarchicalNodes(left, right, getNode, chainCache);
     const compare = (left: OrderEntry, right: OrderEntry) => compareContentLayerEntries(left, right, compareNodes);
 
     if (fullResort) {
@@ -96,7 +97,8 @@ export class ContentOrderSync {
   private isStillShown(entry: OrderEntry): boolean {
     return entry.kind === 'node'
       ? this.nodeLayer.getGroup(entry.node.id) === entry.group && this.nodeLayer.shownIds.has(entry.node.id)
-      : this.connectorLayer.getGroup(entry.connector.id) === entry.group && this.connectorLayer.shownIds.has(entry.connector.id);
+      : this.connectorLayer.getGroup(entry.connector.id) === entry.group &&
+          this.connectorLayer.shownIds.has(entry.connector.id);
   }
 
   /** 收集当前挂载实体的条目；exclude 非空时跳过其中已有的图元 */
