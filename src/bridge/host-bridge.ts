@@ -10,6 +10,9 @@
  *    来自输入框与可编辑区域 (含 mountDOM 嵌入的编辑器) 的按键不转发，避免打字时误触删除等快捷键。
  * 5. 高频事件零强制布局：容器矩形缓存复用，仅在尺寸变化、页面滚动或新手势开始时刷新，
  *    避免 pointermove 每次调用 getBoundingClientRect 触发同步重排；命中拾取延迟到首次读取 target 时才计算。
+ * 6. 按帧合并高频输入：120Hz / 240Hz 设备一帧内会收到多次 pointermove 与滚轮，逐个分发会让拖拽在一帧内提交多次事务。
+ *    移动只保留每个指针的最新一次，滚轮位移累加，在渲染器本帧开始时统一冲刷 (与渲染同帧，不增加延迟)；
+ *    按下、抬起、取消前先冲刷该指针待分发的移动，保证事件顺序。
  */
 
 import type {
@@ -36,9 +39,21 @@ function isEditableTarget(target: EventTarget | null): boolean {
   );
 }
 
+/** 一帧内累加的滚轮输入 (同一种手势：平移或缩放) */
+interface PendingWheel {
+  deltaX: number;
+  deltaY: number;
+  latest: WheelEvent;
+}
+
+/** 滚轮位移统一为像素：Firefox 等以行或页为单位上报 */
+const WHEEL_LINE_HEIGHT = 16;
+
 export interface HostBridgeOptions {
   container: HTMLElement;
   engine: SkyNoteEngine;
+  /** 申请下一帧：渲染器在帧开始时调用 flushPendingInput 冲刷合并后的输入 */
+  requestFrame: () => void;
   getViewport: () => ViewportState;
   hitTest?: (point: Point) => NodeEntity | undefined;
   onInteractionChange?: (isInteracting: boolean) => void;
@@ -50,7 +65,11 @@ export class DOMHostBridge implements IHostBridge {
   private readonly getViewport: () => ViewportState;
   private readonly hitTest?: (point: Point) => NodeEntity | undefined;
   private readonly onInteractionChange?: (isInteracting: boolean) => void;
+  private readonly requestFrame: () => void;
   private readonly abortController = new AbortController();
+  private pendingMoves = new Map<number, PointerEvent>();
+  /** 键为是否缩放手势：平移与缩放各自累加，同帧内先后发生时分别分发 */
+  private pendingWheels = new Map<boolean, PendingWheel>();
   private containerRect: DOMRect | null = null;
   private resizeObserver: ResizeObserver | null = null;
 
@@ -60,6 +79,7 @@ export class DOMHostBridge implements IHostBridge {
     this.getViewport = options.getViewport;
     this.hitTest = options.hitTest;
     this.onInteractionChange = options.onInteractionChange;
+    this.requestFrame = options.requestFrame;
 
     this.bindDomEvents();
   }
@@ -91,7 +111,25 @@ export class DOMHostBridge implements IHostBridge {
     }
   }
 
+  /** 分发本帧合并后的指针移动与滚轮 (由渲染器在帧开始时调用) */
+  flushPendingInput(): void {
+    if (this.pendingMoves.size > 0) {
+      const moves = this.pendingMoves;
+      this.pendingMoves = new Map();
+      for (const e of moves.values()) {
+        this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(e));
+      }
+    }
+    if (this.pendingWheels.size > 0) {
+      const wheels = this.pendingWheels;
+      this.pendingWheels = new Map();
+      for (const [isZoom, wheel] of wheels) this.dispatchWheel(isZoom, wheel);
+    }
+  }
+
   destroy(): void {
+    this.pendingMoves.clear();
+    this.pendingWheels.clear();
     this.abortController.abort();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -176,7 +214,16 @@ export class DOMHostBridge implements IHostBridge {
     };
   }
 
+  /** 按下、抬起、取消前先分发该指针待合并的移动，保证下游看到的事件顺序与真实顺序一致 */
+  private flushPointerMove(pointerId: number): void {
+    const pending = this.pendingMoves.get(pointerId);
+    if (!pending) return;
+    this.pendingMoves.delete(pointerId);
+    this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(pending));
+  }
+
   private handlePointerDown = (e: PointerEvent): void => {
+    this.flushPointerMove(e.pointerId);
     // 新手势开始时兜底刷新一次，覆盖 CSS transform 等观察器无法感知的位移
     this.containerRect = null;
     // 点在画布上即获得键盘焦点；点在嵌入的可编辑区域时让其保留焦点
@@ -189,18 +236,21 @@ export class DOMHostBridge implements IHostBridge {
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
-    const canvasEvent = this.toCanvasPointerEvent(e);
-    this.engine.pointer.dispatchPointerMove(canvasEvent);
+    this.pendingMoves.set(e.pointerId, e);
+    this.requestFrame();
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
+    this.flushPointerMove(e.pointerId);
     this.onInteractionChange?.(false);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerUp(canvasEvent);
   };
 
-  private handlePointerCancel = (_e: PointerEvent): void => {
+  private handlePointerCancel = (e: PointerEvent): void => {
+    this.flushPointerMove(e.pointerId);
     this.onInteractionChange?.(false);
+    this.engine.pointer.dispatchPointerCancel(this.toCanvasPointerEvent(e));
   };
 
   private toCanvasKeyboardEvent(e: KeyboardEvent): CanvasKeyboardEvent {
@@ -230,27 +280,33 @@ export class DOMHostBridge implements IHostBridge {
 
   private handleWheel = (e: WheelEvent): void => {
     e.preventDefault();
+    const unit = e.deltaMode === 1 ? WHEEL_LINE_HEIGHT : e.deltaMode === 2 ? this.getContainerRect().height : 1;
+    const isZoom = e.ctrlKey || e.metaKey;
+    const pending = this.pendingWheels.get(isZoom);
+    if (pending) {
+      pending.deltaX += e.deltaX * unit;
+      pending.deltaY += e.deltaY * unit;
+      pending.latest = e;
+    } else {
+      this.pendingWheels.set(isZoom, { deltaX: e.deltaX * unit, deltaY: e.deltaY * unit, latest: e });
+    }
+    this.requestFrame();
+  };
+
+  private dispatchWheel(isZoom: boolean, wheel: PendingWheel): void {
     const rect = this.getContainerRect();
     const clientPoint: Point = {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top
+      x: wheel.latest.clientX - rect.left,
+      y: wheel.latest.clientY - rect.top
     };
-
-    const viewport = this.getViewport();
-    const centerPoint = screenToWorld(clientPoint, viewport);
-
-    const isZoom = e.ctrlKey || e.metaKey;
-    const deltaZoom = isZoom ? -e.deltaY * 0.002 : 0;
-    const deltaPan: Point = isZoom ? { x: 0, y: 0 } : { x: -e.deltaX, y: -e.deltaY };
-
     const wheelEvent: CanvasWheelEvent = {
-      centerPoint,
-      deltaPan,
-      deltaZoom,
-      isGesture: e.ctrlKey,
-      stopPropagation: () => e.stopPropagation()
+      centerPoint: screenToWorld(clientPoint, this.getViewport()),
+      deltaPan: isZoom ? { x: 0, y: 0 } : { x: -wheel.deltaX, y: -wheel.deltaY },
+      // 对数刻度：累加后取指数即为各次缩放倍率之积，合并与否结果一致
+      deltaZoom: isZoom ? -wheel.deltaY * 0.002 : 0,
+      isGesture: wheel.latest.ctrlKey,
+      stopPropagation: () => wheel.latest.stopPropagation()
     };
-
     this.engine.pointer.dispatchWheel(wheelEvent);
-  };
+  }
 }

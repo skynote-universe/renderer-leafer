@@ -15,7 +15,7 @@
 
 import { Leafer, Group } from 'leafer';
 import type { SkyNoteEngine, NodeEntity, ConnectorEntity, Point, RectBounds, CanvasWheelEvent } from '@skynote/core';
-import { compareHierarchicalNodes, isPointInNode } from '@skynote/core';
+import { compareHierarchicalNodes, computeViewportToFitBounds, isPointInNode } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext, HitEntityResult } from './types';
 import {
   screenToWorld,
@@ -73,6 +73,7 @@ export class LeaferRenderer {
   private readonly pendingRemovedConnectorIds = new Set<string>();
 
   private scheduledRafId: number | null = null;
+  private isFlushingInput = false;
   /** LOD 回升存在迟滞：等待期满后需主动补一帧，否则画面会停留在降级档位直到下一次交互 */
   private lodRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -152,6 +153,7 @@ export class LeaferRenderer {
       container,
       engine: this.engine,
       getViewport: () => this.engine.session.viewport,
+      requestFrame: () => this.requestRender(),
       hitTest: (point: Point) => this.hitTest(point),
       onInteractionChange: (isInteracting: boolean) => {
         this.isInteracting = isInteracting;
@@ -227,7 +229,8 @@ export class LeaferRenderer {
    * 无 rAF 的宿主 (Node / Worker 离屏) 退化为同步渲染
    */
   requestRender(): void {
-    if (this.isDestroyed || this.scheduledRafId !== null) return;
+    // 帧开始冲刷输入时引发的提交会在本帧随后渲染，无需再申请下一帧
+    if (this.isDestroyed || this.scheduledRafId !== null || this.isFlushingInput) return;
     if (typeof requestAnimationFrame === 'undefined') {
       this.renderFrame();
       return;
@@ -248,6 +251,14 @@ export class LeaferRenderer {
     if (this.scheduledRafId !== null) {
       cancelAnimationFrame(this.scheduledRafId);
       this.scheduledRafId = null;
+    }
+
+    // 先冲刷本帧合并的指针移动与滚轮，交互产生的提交与视口变化在同一帧内呈现
+    this.isFlushingInput = true;
+    try {
+      this.hostBridge?.flushPendingInput();
+    } finally {
+      this.isFlushingInput = false;
     }
 
     const frameStartTime = performance.now();
@@ -423,6 +434,47 @@ export class LeaferRenderer {
     return { ...this.engine.session.viewport };
   }
 
+  /**
+   * 以屏幕点 (相对容器，默认视口中心) 为不动点按倍率缩放，供缩放按钮与快捷键使用
+   */
+  zoomBy(factor: number, screenPoint?: Point): void {
+    const point = screenPoint ?? { x: this.viewportWidth / 2, y: this.viewportHeight / 2 };
+    this.engine.session.zoomAt(factor, screenToWorld(point, this.engine.session.viewport));
+  }
+
+  /**
+   * 缩放并平移视口以容纳全部内容 (含伸出容器的后代)；空画布回到原点
+   * @param padding 内容与视口边缘的屏幕像素留白
+   * @param maxZoom 内容很少时不放得过大 (默认 1，即不超过原始尺寸)
+   */
+  zoomToFit(options?: { padding?: number; maxZoom?: number }): void {
+    const bounds = this.engine.spatialIndex.getContentBounds();
+    if (!bounds) {
+      this.setViewport({ x: 0, y: 0, zoom: 1 });
+      return;
+    }
+    const { zoomRange } = this.engine.session;
+    const maxZoom = Math.min(options?.maxZoom ?? 1, zoomRange.max);
+    const fitted = computeViewportToFitBounds(bounds, {
+      viewportWidth: this.viewportWidth,
+      viewportHeight: this.viewportHeight,
+      padding: options?.padding ?? 80,
+      minZoom: zoomRange.min,
+      maxZoom
+    });
+    if (fitted) {
+      this.setViewport(fitted);
+      return;
+    }
+    // 内容退化为一条线或一个点时无法按面积适配：保持缩放，把内容中心移到视口中心
+    const zoom = Math.min(this.engine.session.viewport.zoom, maxZoom);
+    this.setViewport({
+      x: this.viewportWidth / 2 - (bounds.left + bounds.width / 2) * zoom,
+      y: this.viewportHeight / 2 - (bounds.top + bounds.height / 2) * zoom,
+      zoom
+    });
+  }
+
   /** 获取当前自适应 LOD 等级 */
   getLodLevel(): SkyNoteLodLevel {
     return this.currentLodLevel;
@@ -510,20 +562,13 @@ export class LeaferRenderer {
   }
 
   /**
-   * 默认底座滚轮缩放与双指平移
+   * 默认底座滚轮缩放与双指平移：缩放以指针所在世界坐标为不动点，范围由会话统一约束
    */
   private handleDefaultWheel(e: CanvasWheelEvent): void {
-    const viewport = this.engine.session.viewport;
     if (e.deltaZoom !== 0) {
-      // 以滚轮所在世界坐标为中心缩放
-      const oldZoom = viewport.zoom;
-      const newZoom = Math.max(0.1, Math.min(10, oldZoom * (1 + e.deltaZoom)));
-      this.setViewport({
-        x: viewport.x + e.centerPoint.x * (oldZoom - newZoom),
-        y: viewport.y + e.centerPoint.y * (oldZoom - newZoom),
-        zoom: newZoom
-      });
+      this.engine.session.zoomAt(Math.exp(e.deltaZoom), e.centerPoint);
     } else if (e.deltaPan.x !== 0 || e.deltaPan.y !== 0) {
+      const viewport = this.engine.session.viewport;
       this.setViewport({ x: viewport.x + e.deltaPan.x, y: viewport.y + e.deltaPan.y });
     }
   }
