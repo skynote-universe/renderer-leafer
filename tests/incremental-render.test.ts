@@ -140,7 +140,7 @@ describe('LeaferRenderer 增量渲染', () => {
       update: () => {},
       destroy: (_shapes, node) => destroyed.push(node.id)
     });
-    const cacheSize = () => (renderer as unknown as { nodeCaches: Map<string, unknown> }).nodeCaches.size;
+    const cacheSize = () => (renderer as unknown as { nodeLayer: { cacheCount: number } }).nodeLayer.cacheCount;
     const contentLayer = renderer.getContentLayer()!;
     const panTo = (index: number) => {
       renderer.setViewport({ x: -index * 2000 });

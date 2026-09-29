@@ -1,0 +1,62 @@
+/**
+ * @file visibility-tracker.ts
+ * @description 图层可见集合与离屏缓存 LRU 追踪 (节点层与连线层共用)
+ *
+ * 设计考量 (Why):
+ * 1. 每帧只在「上一帧可见集合」与「本帧可见集合」之间做差集，开销只随可见规模增长。
+ * 2. 离屏实体保留图元以便回到视野时就地复用；Set 的插入序即 LRU 序 (最早离开视野者在前)，
+ *    进出队与淘汰均为 O(1)，内存不随浏览过的画布面积无限增长。
+ */
+
+export class VisibilityTracker {
+  private shown = new Set<string>();
+  private nextShown = new Set<string>();
+  private readonly offscreen = new Set<string>();
+
+  constructor(private readonly offscreenLimit: number) {}
+
+  /** 当前挂载在场景树上的实体 */
+  get shownIds(): ReadonlySet<string> {
+    return this.shown;
+  }
+
+  beginFrame(): void {
+    this.nextShown = new Set();
+  }
+
+  /**
+   * 标记实体本帧可见
+   * @returns 是否为新进入场景 (需要重新确定层级位置)
+   */
+  markShown(id: string): boolean {
+    this.nextShown.add(id);
+    this.offscreen.delete(id);
+    return !this.shown.has(id);
+  }
+
+  /**
+   * 结束本帧：离开视野者交给 onHide 并进入 LRU 队尾，超出限额者从队首出队后交给 onEvict
+   * 先出队再回调，保证回调中缓存缺失时淘汰循环依旧前进
+   */
+  endFrame(onHide: (id: string) => void, onEvict: (id: string) => void): void {
+    for (const id of this.shown) {
+      if (this.nextShown.has(id)) continue;
+      onHide(id);
+      this.offscreen.add(id);
+    }
+    this.shown = this.nextShown;
+
+    while (this.offscreen.size > this.offscreenLimit) {
+      const oldest = this.offscreen.values().next().value!;
+      this.offscreen.delete(oldest);
+      onEvict(oldest);
+    }
+  }
+
+  /** 实体被销毁时移出全部集合 */
+  forget(id: string): void {
+    this.shown.delete(id);
+    this.nextShown.delete(id);
+    this.offscreen.delete(id);
+  }
+}
