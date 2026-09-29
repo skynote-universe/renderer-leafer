@@ -11,9 +11,8 @@
 
 import type { Group } from 'leafer';
 import type { SkyNoteEngine, CanvasTheme, NodeEntity } from '@skynote/core';
-import { invertMatrix } from '@skynote/core';
-import type { ConnectorRenderCache, LayerSyncResult } from '../types';
-import { renderConnector } from '../connector/connector-renderer';
+import type { LayerSyncResult } from '../types';
+import { ConnectorView } from '../connector/connector-view';
 import { resolveConnectorLayerPlacement, type ConnectorLayerPlacement } from '../layering/content-layer-order';
 import { VisibilityTracker } from './visibility-tracker';
 
@@ -23,7 +22,7 @@ export interface ConnectorLayerOptions {
 }
 
 export class ConnectorLayer {
-  private readonly caches = new Map<string, ConnectorRenderCache>();
+  private readonly views = new Map<string, ConnectorView>();
   private readonly visibility: VisibilityTracker;
   private readonly placements = new Map<string, ConnectorLayerPlacement>();
   /** 祖先链只随 parentId 变化，与挂载位置同时失效 */
@@ -35,7 +34,7 @@ export class ConnectorLayer {
 
   /** 当前持有的图元缓存数 (含离屏保留) */
   get cacheCount(): number {
-    return this.caches.size;
+    return this.views.size;
   }
 
   /** 当前挂载在内容层上的连线 */
@@ -44,7 +43,7 @@ export class ConnectorLayer {
   }
 
   getGroup(connectorId: string): Group | undefined {
-    return this.caches.get(connectorId)?.group;
+    return this.views.get(connectorId)?.group;
   }
 
   /** 文档层叠关系变化 (zIndex / parentId / 端点 / 增删) 后调用，挂载位置在下次读取时重新求解 */
@@ -94,28 +93,21 @@ export class ConnectorLayer {
       const start = entering ? performance.now() : 0;
       const { containerId } = this.getPlacement(connectorId)!;
       const container = resolveContainer(containerId);
-      const updated = renderConnector(container, {
+      let view = this.views.get(connectorId);
+      if (!view) {
+        view = new ConnectorView();
+        this.views.set(connectorId, view);
+      }
+      view.update({
         connector: runtimeConnector.entity,
         route,
         dataVersion: runtimeConnector.runtime.dataVersion,
         arrowMarkers: engine.arrowMarkers,
-        existingCache: this.caches.get(connectorId),
         theme
       });
-      if (updated.group.parent !== container) container.add(updated.group);
+      if (view.group.parent !== container) container.add(view.group);
+      view.setContainerTransform(containerId === undefined ? null : engine.entityStore.getWorldTransform(containerId)!);
 
-      const containerTransform = containerId === undefined ? null : engine.entityStore.getWorldTransform(containerId)!;
-      if (updated.containerTransform !== containerTransform) {
-        const inverse = containerTransform && invertMatrix(containerTransform);
-        updated.group.set(
-          inverse
-            ? { x: inverse.e, y: inverse.f, rotation: (Math.atan2(inverse.b, inverse.a) * 180) / Math.PI }
-            : { x: 0, y: 0, rotation: 0 }
-        );
-        updated.containerTransform = containerTransform;
-      }
-
-      this.caches.set(connectorId, updated);
       this.visibility.markShown(connectorId);
       if (entering) {
         result.enterMs += performance.now() - start;
@@ -124,7 +116,7 @@ export class ConnectorLayer {
     }
     this.visibility.endFrame(
       (connectorId) => {
-        this.caches.get(connectorId)?.group.remove();
+        this.views.get(connectorId)?.group.remove();
         result.left++;
       },
       (connectorId) => this.destroy(connectorId)
@@ -134,13 +126,13 @@ export class ConnectorLayer {
 
   destroy(connectorId: string): void {
     this.visibility.forget(connectorId);
-    // 原生连线渲染器尚未接入，缓存中的图元均由默认线型创建，不交给原生 destroy 释放
-    this.caches.get(connectorId)?.group.remove();
-    this.caches.delete(connectorId);
+    // 原生连线渲染器尚未接入，图元均由默认线型创建，直接随视图销毁
+    this.views.get(connectorId)?.destroy();
+    this.views.delete(connectorId);
   }
 
   destroyAll(): void {
-    for (const connectorId of [...this.caches.keys()]) {
+    for (const connectorId of [...this.views.keys()]) {
       this.destroy(connectorId);
     }
   }

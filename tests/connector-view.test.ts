@@ -79,12 +79,11 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
 
-const { Group, Path, Line } = await import('leafer');
-const { renderConnector } = await import('../src/connector/connector-renderer');
+const { Path } = await import('leafer');
+const { ConnectorView } = await import('../src/connector/connector-view');
 
-describe('Connector Renderer', () => {
+describe('ConnectorView', () => {
   it('正确创建基础直连线与端点箭头后撤计算', () => {
-    const parentGroup = new Group();
     const arrowMarkers = new ArrowMarkerRegistry();
 
     const connector: ConnectorEntity = {
@@ -102,28 +101,20 @@ describe('Connector Renderer', () => {
       }
     };
 
-    const cache = renderConnector(parentGroup, {
-      theme: TEST_THEME,
-      connector,
-      route: routeOf(connector),
-      dataVersion: 1,
-      arrowMarkers
-    });
+    const view = new ConnectorView();
+    view.update({ theme: TEST_THEME, connector, route: routeOf(connector), dataVersion: 1, arrowMarkers });
 
-    expect(cache.group).toBeDefined();
-    expect(cache.lineShape).toBeInstanceOf(Line);
-    expect(cache.endMarkerShape).toBeInstanceOf(Path);
-    expect(cache.startMarkerShape).toBeUndefined();
+    expect(view.endMarker).toBeInstanceOf(Path);
+    expect(view.startMarker).toBeNull();
 
     // 终点箭头切线水平向右 (0 度)，终点坐标在端点后撤 lineOffset (默认 8px) 之后向内收敛为 92px
-    expect(cache.computedPoints.length).toBe(2);
-    expect(cache.computedPoints[0]).toEqual({ x: 0, y: 0 });
-    expect(cache.computedPoints[1].x).toBeCloseTo(92, 1);
-    expect(cache.computedPoints[1].y).toBeCloseTo(0, 1);
+    expect(view.points.length).toBe(2);
+    expect(view.points[0]).toEqual({ x: 0, y: 0 });
+    expect(view.points[1].x).toBeCloseTo(92, 1);
+    expect(view.points[1].y).toBeCloseTo(0, 1);
   });
 
-  it('Fast Path 守卫：路由、属性与主题均未变化时直接返回现有缓存', () => {
-    const parentGroup = new Group();
+  it('Fast Path 守卫：路由、属性与主题均未变化时跳过重绘', () => {
     const arrowMarkers = new ArrowMarkerRegistry();
 
     const connector: ConnectorEntity = {
@@ -137,28 +128,17 @@ describe('Connector Renderer', () => {
     };
 
     const route = routeOf(connector);
-    const firstCache = renderConnector(parentGroup, {
-      theme: TEST_THEME,
-      connector,
-      route,
-      dataVersion: 1,
-      arrowMarkers
-    });
+    const view = new ConnectorView();
+    const input = { theme: TEST_THEME, connector, route, dataVersion: 1, arrowMarkers };
+    expect(view.update(input)).toBe(true);
+    const points = view.points;
 
-    const secondCache = renderConnector(parentGroup, {
-      theme: TEST_THEME,
-      connector,
-      route,
-      dataVersion: 1,
-      arrowMarkers,
-      existingCache: firstCache
-    });
-
-    expect(secondCache).toBe(firstCache);
+    expect(view.update(input)).toBe(false);
+    expect(view.points).toBe(points);
+    expect(view.update({ ...input, dataVersion: 2 })).toBe(true);
   });
 
   it('动态增补箭头：原连线无箭头，后续增改属性时安全就地补全 Path', () => {
-    const parentGroup = new Group();
     const arrowMarkers = new ArrowMarkerRegistry();
 
     const connectorNoArrow: ConnectorEntity = {
@@ -171,15 +151,11 @@ describe('Connector Renderer', () => {
       to: { position: { x: 200, y: 0 } }
     };
 
-    const initialCache = renderConnector(parentGroup, {
-      theme: TEST_THEME,
-      connector: connectorNoArrow,
-      route: routeOf(connectorNoArrow),
-      dataVersion: 1,
-      arrowMarkers
-    });
-    expect(initialCache.startMarkerShape).toBeUndefined();
-    expect(initialCache.endMarkerShape).toBeUndefined();
+    const view = new ConnectorView();
+    const route = routeOf(connectorNoArrow);
+    view.update({ theme: TEST_THEME, connector: connectorNoArrow, route, dataVersion: 1, arrowMarkers });
+    expect(view.startMarker).toBeNull();
+    expect(view.endMarker).toBeNull();
 
     // 变为带有起点与终点箭头
     const connectorWithArrows: ConnectorEntity = {
@@ -190,23 +166,22 @@ describe('Connector Renderer', () => {
       }
     };
 
-    const updatedCache = renderConnector(parentGroup, {
-      theme: TEST_THEME,
-      connector: connectorWithArrows,
-      route: initialCache.route,
-      dataVersion: 2,
-      arrowMarkers,
-      existingCache: initialCache
-    });
+    view.update({ theme: TEST_THEME, connector: connectorWithArrows, route, dataVersion: 2, arrowMarkers });
+    const { startMarker, endMarker } = view;
+    expect(startMarker).toBeInstanceOf(Path);
+    expect(endMarker).toBeInstanceOf(Path);
+    expect(view.group.children.length).toBe(3); // Line + startMarker + endMarker
 
-    expect(updatedCache).toBe(initialCache);
-    expect(updatedCache.startMarkerShape).toBeInstanceOf(Path);
-    expect(updatedCache.endMarkerShape).toBeInstanceOf(Path);
-    expect(updatedCache.group.children.length).toBe(3); // Line + startMarker + endMarker
+    // 取消箭头只隐藏，再次启用时复用同一图元
+    view.update({ theme: TEST_THEME, connector: connectorNoArrow, route, dataVersion: 3, arrowMarkers });
+    expect(startMarker!.visible).toBe(false);
+    view.update({ theme: TEST_THEME, connector: connectorWithArrows, route, dataVersion: 4, arrowMarkers });
+    expect(view.startMarker).toBe(startMarker);
+    expect(startMarker!.visible).toBe(true);
+    expect(view.group.children.length).toBe(3);
   });
 
   it('支持节点锚点 (anchorId) 精确吸附解算与空心三角箭头 (match-background) 底色填充', () => {
-    const parentGroup = new Group();
     const arrowMarkers = new ArrowMarkerRegistry();
 
     const fromNode = {
@@ -250,7 +225,8 @@ describe('Connector Renderer', () => {
       }
     };
 
-    const cache = renderConnector(parentGroup, {
+    const view = new ConnectorView();
+    view.update({
       theme: TEST_THEME,
       connector,
       route: routeOf(connector, { 'node-from': fromNode, 'node-to': toNode }),
@@ -258,17 +234,16 @@ describe('Connector Renderer', () => {
       arrowMarkers
     });
 
-    expect(cache.lineShape).toBeInstanceOf(Line);
     // 起点位于 fromNode 的 right 锚点: (100 + 80 = 180, 100 + 30 = 130)
-    expect(cache.computedPoints[0].x).toBeCloseTo(180, 1);
-    expect(cache.computedPoints[0].y).toBeCloseTo(130, 1);
+    expect(view.points[0].x).toBeCloseTo(180, 1);
+    expect(view.points[0].y).toBeCloseTo(130, 1);
 
     // 终点位于 toNode 的 left 锚点: (300, 130)，后撤 8px 后为 292
-    expect(cache.computedPoints[1].x).toBeCloseTo(292, 1);
-    expect(cache.computedPoints[1].y).toBeCloseTo(130, 1);
+    expect(view.points[1].x).toBeCloseTo(292, 1);
+    expect(view.points[1].y).toBeCloseTo(130, 1);
 
     // 空心箭头应填充白色背景底色，描边为连线颜色
-    const endMarker = cache.endMarkerShape as any;
+    const endMarker = view.endMarker as any;
     expect(endMarker).toBeInstanceOf(Path);
     expect(endMarker.fill).toBe('#FFFFFF');
     expect(endMarker.stroke).toBe('#0055FF');

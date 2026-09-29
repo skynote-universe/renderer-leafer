@@ -7,7 +7,7 @@
  * 2. 干净纯粹：严禁未被实际使用的幽灵字段 (如 lifecycleCustomData)。
  */
 
-import type { NodeEntity, ConnectorEntity, Point, CanvasTheme, ComputedRoute, Matrix2D } from '@skynote/core';
+import type { NodeEntity, ConnectorEntity, CanvasTheme } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 import type { ViewportState } from './viewport/viewport-transform';
 
@@ -73,26 +73,6 @@ export interface NodeRenderCache {
   node: NodeEntity;
   /** 子节点与容器内连线的挂载容器 (按需创建；裁剪型节点为 overflow: 'hide' 的 Box) */
   childrenContainer: Group | null;
-}
-
-/** 连线渲染图元缓存项 */
-export interface ConnectorRenderCache {
-  readonly group: Group;
-  readonly lineShape: Line | Path;
-  startMarkerShape?: LeaferShape;
-  endMarkerShape?: LeaferShape;
-  /** 最近一次绘制所用的路由 (按引用比较，路由重算即失效) */
-  route: ComputedRoute;
-  /** 最近一次渲染时的连线业务数据版本号 */
-  dataVersion: number;
-  /** 实际绘制的折线点集 (两端已按箭头后撤) */
-  computedPoints: Point[];
-  /** 最近一次渲染的连线实体 (卸载时据其 connectorType 寻址原生渲染器，并作为 destroy 的入参) */
-  connector: ConnectorEntity;
-  /** 最近一次渲染所用的主题 (按引用比较，主题切换即失效) */
-  theme: CanvasTheme;
-  /** 挂载容器的世界矩阵 (按引用比较)；连线图元以其逆矩阵抵消容器变换，路由点保持世界坐标 */
-  containerTransform: Matrix2D | null;
 }
 
 /** 顶层瞬态图元渲染会话 */
