@@ -143,7 +143,6 @@ export class LeaferRenderer {
     this.connectorLayer = new ConnectorLayer({
       contentLayer: this.contentLayer,
       engine: this.engine,
-      renderers: this.connectorRenderers,
       stableOrder: this.stableOrder,
       offscreenCacheLimit: this.offscreenCacheLimit
     });

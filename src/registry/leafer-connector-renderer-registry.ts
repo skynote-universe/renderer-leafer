@@ -13,7 +13,11 @@ export interface LeaferConnectorRenderContext extends LeaferRenderContext {
   computedPoints?: Point[];
 }
 
-/** 原生连线生命周期渲染器契约 */
+/**
+ * 原生连线生命周期渲染器契约
+ * 【尚未接入】连线图层目前统一按引擎路由以默认线型绘制，不会调用 create / update / destroy；
+ * 接入时上下文应改为携带 ComputedRoute，而非自行解析端点。
+ */
 export interface LeaferConnectorLifecycleRenderer {
   readonly connectorType: string;
   create(connector: ConnectorEntity, context: LeaferConnectorRenderContext): LeaferShape[];
