@@ -15,7 +15,6 @@ import type { NodeRenderCache, LeaferRenderContext } from '../types';
 import { reconcileLeaferShapes } from '../primitives/primitive-mapper';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import { VisibilityTracker } from './visibility-tracker';
-import type { StableOrder } from './stable-order';
 
 /** 本帧要求的节点细节档位 */
 export type NodeRenderDetail = 'full' | 'placeholder';
@@ -30,7 +29,6 @@ export interface NodeLayerOptions {
   contentLayer: Group;
   engine: SkyNoteEngine;
   renderers: LeaferNodeRendererRegistry;
-  stableOrder: StableOrder;
   dpr: number;
   offscreenCacheLimit: number;
 }
@@ -90,7 +88,6 @@ export class NodeLayer {
   /** 销毁节点图元缓存，原生渲染器资源成对释放 */
   destroy(nodeId: string): void {
     this.visibility.forget(nodeId);
-    this.options.stableOrder.release(nodeId);
     const cache = this.caches.get(nodeId);
     if (!cache) return;
     this.options.renderers.get(cache.node.nodeType)?.destroy?.(cache.shapes, cache.node);

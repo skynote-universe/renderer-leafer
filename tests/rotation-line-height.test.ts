@@ -27,7 +27,7 @@ describe('旋转约定在渲染层的落地', () => {
       width: 200,
       height: 100,
       rotation: 90,
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false
     };
     engine.documentStore.addNode(node);
@@ -54,7 +54,7 @@ describe('旋转约定在渲染层的落地', () => {
       width: 200,
       height: 100,
       rotation: 45,
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false
     });
     const renderer = mount(engine);

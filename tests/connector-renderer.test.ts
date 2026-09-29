@@ -82,7 +82,7 @@ describe('Connector Renderer', () => {
     const connector: ConnectorEntity = {
       id: 'conn-1',
       type: 'connector',
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       connectorType: 'straight',
       from: { position: { x: 0, y: 0 } },
@@ -121,7 +121,7 @@ describe('Connector Renderer', () => {
     const connector: ConnectorEntity = {
       id: 'conn-fast',
       type: 'connector',
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       connectorType: 'straight',
       from: { position: { x: 10, y: 10 } },
@@ -156,7 +156,7 @@ describe('Connector Renderer', () => {
     const connectorNoArrow: ConnectorEntity = {
       id: 'conn-dynamic',
       type: 'connector',
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       connectorType: 'straight',
       from: { position: { x: 0, y: 0 } },
@@ -230,7 +230,7 @@ describe('Connector Renderer', () => {
     const connector: ConnectorEntity = {
       id: 'conn-anchor',
       type: 'connector',
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       connectorType: 'straight',
       from: { nodeId: 'node-from', anchorId: 'right' },

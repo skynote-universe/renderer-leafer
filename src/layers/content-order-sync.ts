@@ -19,14 +19,12 @@ import {
 } from '../layering/content-layer-order';
 import type { NodeLayer } from './node-layer';
 import type { ConnectorLayer } from './connector-layer';
-import type { StableOrder } from './stable-order';
 
 export function syncContentOrder(
   contentLayer: Group,
   nodeLayer: NodeLayer,
   connectorLayer: ConnectorLayer,
-  entityStore: EntityReader,
-  stableOrder: StableOrder
+  entityStore: EntityReader
 ): void {
   const chainCache = new Map<string, NodeEntity[]>();
   const getNode = (id: string) => entityStore.getNode(id)?.entity;
@@ -37,7 +35,7 @@ export function syncContentOrder(
     const group = nodeLayer.getGroup(nodeId);
     const node = getNode(nodeId);
     if (!group || !node) continue;
-    ordered.push({ kind: 'node', node, group, stableOrder: stableOrder.get(nodeId) });
+    ordered.push({ kind: 'node', node, group });
   }
   for (const connectorId of connectorLayer.shownIds) {
     const group = connectorLayer.getGroup(connectorId);
@@ -47,8 +45,7 @@ export function syncContentOrder(
       kind: 'connector',
       connector,
       group,
-      anchorNode: resolveConnectorLayerAnchor(connector, getNode, compareNodes),
-      stableOrder: stableOrder.get(connectorId)
+      anchorNode: resolveConnectorLayerAnchor(connector, getNode, compareNodes)
     });
   }
 

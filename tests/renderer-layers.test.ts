@@ -40,7 +40,7 @@ describe('LeaferRenderer 场景树图层架构', () => {
 
   it('通过 DocumentStore 修改 zIndex 后内容层自动重排', () => {
     const engine = new SkyNoteEngine();
-    const make = (id: string, zIndex: number): NodeEntity => ({
+    const make = (id: string, zIndex: string): NodeEntity => ({
       id,
       type: 'node',
       nodeType: 'rect',
@@ -52,8 +52,8 @@ describe('LeaferRenderer 场景树图层架构', () => {
       zIndex,
       locked: false
     });
-    engine.documentStore.addNode(make('a', 1));
-    engine.documentStore.addNode(make('b', 2));
+    engine.documentStore.addNode(make('a', 'a1'));
+    engine.documentStore.addNode(make('b', 'a2'));
 
     const renderer = createLeaferRenderer(engine);
     const container = document.createElement('div');
@@ -66,7 +66,7 @@ describe('LeaferRenderer 场景树图层架构', () => {
     expect(contentLayer.children).toEqual([groupA, groupB]);
 
     // 提交只登记变更并申请下一帧，显式冲刷后按 ChangeSet.orderChanged 重排
-    engine.documentStore.updateNode('a', { zIndex: 3 });
+    engine.documentStore.updateNode('a', { zIndex: 'a3' });
     renderer.renderFrame();
     expect(contentLayer.children).toEqual([groupB, groupA]);
 

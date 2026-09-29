@@ -15,7 +15,7 @@ function makeNode(id: string, x: number, extra?: Partial<NodeEntity>): NodeEntit
     width: 50,
     height: 50,
     rotation: 0,
-    zIndex: 1,
+    zIndex: 'a1',
     locked: false,
     ...extra
   };
@@ -89,13 +89,13 @@ describe('LeaferRenderer 增量渲染', () => {
 
   it('重叠节点拾取按层级取最上层，而非空间索引返回顺序', () => {
     const engine = new SkyNoteEngine();
-    engine.documentStore.addNode(makeNode('top', 0, { zIndex: 5 }));
-    engine.documentStore.addNode(makeNode('bottom', 0, { zIndex: 1 }));
+    engine.documentStore.addNode(makeNode('top', 0, { zIndex: 'a5' }));
+    engine.documentStore.addNode(makeNode('bottom', 0, { zIndex: 'a1' }));
     const renderer = mountRenderer(engine);
 
     expect(renderer.hitTest({ x: 10, y: 10 })?.id).toBe('top');
 
-    engine.documentStore.updateNode('bottom', { zIndex: 9 });
+    engine.documentStore.updateNode('bottom', { zIndex: 'a9' });
     expect(renderer.hitTest({ x: 10, y: 10 })?.id).toBe('bottom');
     renderer.destroy();
   });
@@ -110,7 +110,7 @@ describe('LeaferRenderer 增量渲染', () => {
       connectorType: 'straight',
       from: { nodeId: 'a' },
       to: { nodeId: 'b' },
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false
     };
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
@@ -179,7 +179,7 @@ describe('LeaferRenderer 增量渲染', () => {
       connectorType: 'detour',
       from: { nodeId: 'a' },
       to: { nodeId: 'b' },
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false
     };
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });

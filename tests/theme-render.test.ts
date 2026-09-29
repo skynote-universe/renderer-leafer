@@ -5,7 +5,7 @@ import type { NodeEntity, ConnectorEntity, CanvasTheme } from '@skynote/core';
 import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-renderer';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
-  return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 1, locked: false };
+  return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
@@ -27,7 +27,7 @@ describe('LeaferRenderer 主题驱动配色', () => {
   it('未设置颜色的节点取主题缺省色，显式色值保持不变；切换主题后重绘并更新画布底色', () => {
     const engine = new SkyNoteEngine({ theme: { seed: LIGHT_CANVAS_THEME_SEED } });
     engine.documentStore.addNode(makeNode('plain', 0));
-    engine.documentStore.addNode({ ...makeNode('custom', 100), style: { fill: '#FF0000' } });
+    engine.documentStore.addNode({ ...makeNode('custom', 100), zIndex: 'a2', style: { fill: '#FF0000' } });
     const renderer = mountRenderer(engine);
     const light = engine.session.theme;
 
@@ -75,7 +75,7 @@ describe('LeaferRenderer 主题驱动配色', () => {
       connectorType: 'straight',
       from: { nodeId: 'a' },
       to: { nodeId: 'b' },
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       style: { endArrow: 'standard:triangle' }
     };

@@ -10,7 +10,7 @@ import {
 
 function createMockNode(params: {
   id: string;
-  zIndex?: number;
+  zIndex?: string;
   parentId?: string;
 }): NodeEntity {
   return {
@@ -22,7 +22,7 @@ function createMockNode(params: {
     width: 100,
     height: 100,
     rotation: 0,
-    zIndex: params.zIndex ?? 1,
+    zIndex: params.zIndex ?? 'a1',
     parentId: params.parentId,
     locked: false
   };
@@ -32,7 +32,7 @@ function createMockConnector(params: {
   id: string;
   fromId?: string;
   toId?: string;
-  zIndex?: number;
+  zIndex?: string;
 }): ConnectorEntity {
   return {
     id: params.id,
@@ -40,16 +40,16 @@ function createMockConnector(params: {
     connectorType: 'straight',
     from: { nodeId: params.fromId },
     to: { nodeId: params.toId },
-    zIndex: params.zIndex ?? 1,
+    zIndex: params.zIndex ?? 'a1',
     locked: false
   };
 }
 
 describe('ContentLayerOrder 场景树层级拓扑排序', () => {
   it('resolveNodeAncestryChain 正确求解祖先链并防御环状引用', () => {
-    const root = createMockNode({ id: 'root', zIndex: 1 });
-    const container = createMockNode({ id: 'container', parentId: 'root', zIndex: 1 });
-    const child = createMockNode({ id: 'child', parentId: 'container', zIndex: 1 });
+    const root = createMockNode({ id: 'root', zIndex: 'a1' });
+    const container = createMockNode({ id: 'container', parentId: 'root', zIndex: 'a1' });
+    const child = createMockNode({ id: 'child', parentId: 'container', zIndex: 'a1' });
 
     const nodes = new Map<string, NodeEntity>([
       ['root', root],
@@ -61,8 +61,8 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     expect(chain.map(n => n.id)).toEqual(['root', 'container', 'child']);
 
     // 环状防御测试
-    const loopA = createMockNode({ id: 'loopA', parentId: 'loopB', zIndex: 1 });
-    const loopB = createMockNode({ id: 'loopB', parentId: 'loopA', zIndex: 1 });
+    const loopA = createMockNode({ id: 'loopA', parentId: 'loopB', zIndex: 'a1' });
+    const loopB = createMockNode({ id: 'loopB', parentId: 'loopA', zIndex: 'a1' });
     const loopNodes = new Map<string, NodeEntity>([
       ['loopA', loopA],
       ['loopB', loopB]
@@ -74,8 +74,8 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
   });
 
   it('compareHierarchicalNodes 确保父容器在底、子节点在顶', () => {
-    const container = createMockNode({ id: 'frame1', zIndex: 1 });
-    const child = createMockNode({ id: 'card1', parentId: 'frame1', zIndex: 1 });
+    const container = createMockNode({ id: 'frame1', zIndex: 'a1' });
+    const child = createMockNode({ id: 'card1', parentId: 'frame1', zIndex: 'a1' });
 
     const nodes = new Map<string, NodeEntity>([
       ['frame1', container],
@@ -88,9 +88,9 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
   });
 
   it('resolveConnectorLayerAnchor 求解连线的伴生锚点 (选取层级更高者)', () => {
-    const frame = createMockNode({ id: 'frame', zIndex: 1 });
-    const innerCard = createMockNode({ id: 'innerCard', parentId: 'frame', zIndex: 1 });
-    const outsideCard = createMockNode({ id: 'outsideCard', zIndex: 2 });
+    const frame = createMockNode({ id: 'frame', zIndex: 'a1' });
+    const innerCard = createMockNode({ id: 'innerCard', parentId: 'frame', zIndex: 'a1' });
+    const outsideCard = createMockNode({ id: 'outsideCard', zIndex: 'a2' });
 
     const nodes = new Map<string, NodeEntity>([
       ['frame', frame],
@@ -112,10 +112,10 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
   });
 
   it('综合拓扑排序：容器内连线高于容器背景、低于内部子节点', () => {
-    const frame = createMockNode({ id: 'frame', zIndex: 1 });
-    const cardA = createMockNode({ id: 'cardA', parentId: 'frame', zIndex: 1 });
-    const cardB = createMockNode({ id: 'cardB', parentId: 'frame', zIndex: 2 });
-    const innerConn = createMockConnector({ id: 'innerConn', fromId: 'cardA', toId: 'cardB', zIndex: 1 });
+    const frame = createMockNode({ id: 'frame', zIndex: 'a1' });
+    const cardA = createMockNode({ id: 'cardA', parentId: 'frame', zIndex: 'a1' });
+    const cardB = createMockNode({ id: 'cardB', parentId: 'frame', zIndex: 'a2' });
+    const innerConn = createMockConnector({ id: 'innerConn', fromId: 'cardA', toId: 'cardB', zIndex: 'a1' });
 
     const nodes = new Map<string, NodeEntity>([
       ['frame', frame],
@@ -126,16 +126,15 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
 
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardB, group: null, stableOrder: 0 },
+      { kind: 'node', node: cardB, group: null },
       {
         kind: 'connector',
         connector: innerConn,
         group: null,
-        anchorNode: resolveConnectorLayerAnchor(innerConn, getNode, compareNodes),
-        stableOrder: 1
+        anchorNode: resolveConnectorLayerAnchor(innerConn, getNode, compareNodes)
       },
-      { kind: 'node', node: frame, group: null, stableOrder: 2 },
-      { kind: 'node', node: cardA, group: null, stableOrder: 3 }
+      { kind: 'node', node: frame, group: null },
+      { kind: 'node', node: cardA, group: null }
     ];
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
@@ -146,13 +145,13 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
   });
 
   it('跨画框连线穿透：高于低层容器背景，伴随高层容器子节点且在卡片下方', () => {
-    const frameA = createMockNode({ id: 'frameA', zIndex: 1 });
-    const cardInA = createMockNode({ id: 'cardInA', parentId: 'frameA', zIndex: 1 });
+    const frameA = createMockNode({ id: 'frameA', zIndex: 'a1' });
+    const cardInA = createMockNode({ id: 'cardInA', parentId: 'frameA', zIndex: 'a1' });
 
-    const frameB = createMockNode({ id: 'frameB', zIndex: 2 });
-    const cardInB = createMockNode({ id: 'cardInB', parentId: 'frameB', zIndex: 1 });
+    const frameB = createMockNode({ id: 'frameB', zIndex: 'a2' });
+    const cardInB = createMockNode({ id: 'cardInB', parentId: 'frameB', zIndex: 'a1' });
 
-    const crossConn = createMockConnector({ id: 'crossConn', fromId: 'cardInA', toId: 'cardInB', zIndex: 1 });
+    const crossConn = createMockConnector({ id: 'crossConn', fromId: 'cardInA', toId: 'cardInB', zIndex: 'a1' });
 
     const nodes = new Map<string, NodeEntity>([
       ['frameA', frameA],
@@ -164,17 +163,16 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     const compareNodes = (a: NodeEntity, b: NodeEntity) => compareHierarchicalNodes(a, b, getNode);
 
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardInB, group: null, stableOrder: 0 },
-      { kind: 'node', node: frameB, group: null, stableOrder: 1 },
+      { kind: 'node', node: cardInB, group: null },
+      { kind: 'node', node: frameB, group: null },
       {
         kind: 'connector',
         connector: crossConn,
         group: null,
-        anchorNode: resolveConnectorLayerAnchor(crossConn, getNode, compareNodes),
-        stableOrder: 2
+        anchorNode: resolveConnectorLayerAnchor(crossConn, getNode, compareNodes)
       },
-      { kind: 'node', node: cardInA, group: null, stableOrder: 3 },
-      { kind: 'node', node: frameA, group: null, stableOrder: 4 }
+      { kind: 'node', node: cardInA, group: null },
+      { kind: 'node', node: frameA, group: null }
     ];
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));
@@ -184,12 +182,12 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
     expect(resultIds).toEqual(['frameA', 'cardInA', 'frameB', 'crossConn', 'cardInB']);
   });
 
-  it('严格弱序传递性：同分兄弟节点与伴生连线不产生逆序错位', () => {
+  it('同分兄弟节点按 id 决胜，伴生连线紧贴宿主节点下方', () => {
     // 兄弟卡片 A 与 B (zIndex 均为 1，且同属于 root)
-    const cardA = createMockNode({ id: 'cardA', zIndex: 1 });
-    const cardB = createMockNode({ id: 'cardB', zIndex: 1 });
+    const cardA = createMockNode({ id: 'cardA', zIndex: 'a1' });
+    const cardB = createMockNode({ id: 'cardB', zIndex: 'a1' });
     // 连线 connB 伴随 cardB
-    const connB = createMockConnector({ id: 'connB', fromId: 'cardB', zIndex: 1 });
+    const connB = createMockConnector({ id: 'connB', fromId: 'cardB', zIndex: 'a1' });
 
     const nodes = new Map<string, NodeEntity>([
       ['cardA', cardA],
@@ -200,15 +198,14 @@ describe('ContentLayerOrder 场景树层级拓扑排序', () => {
 
     // 输入顺序：cardA (0) -> connB (1) -> cardB (2)
     const entries: ContentLayerOrderEntry[] = [
-      { kind: 'node', node: cardB, group: null, stableOrder: 2 },
+      { kind: 'node', node: cardB, group: null },
       {
         kind: 'connector',
         connector: connB,
         group: null,
-        anchorNode: cardB,
-        stableOrder: 1
+        anchorNode: cardB
       },
-      { kind: 'node', node: cardA, group: null, stableOrder: 0 }
+      { kind: 'node', node: cardA, group: null }
     ];
 
     entries.sort((a, b) => compareContentLayerEntries(a, b, compareNodes));

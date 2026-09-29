@@ -35,7 +35,7 @@ describe('createLeaferTextMeasurer', () => {
       width: 200,
       height: 1,
       rotation: 0,
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false,
       textBlocks: [createSimpleTextBlock('t', 'hello')]
     };

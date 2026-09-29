@@ -12,20 +12,19 @@
  */
 
 import type { ConnectorEntity, NodeEntity } from '@skynote/core';
+import { compareFractionalIndex } from '@skynote/core';
 
 export type ContentLayerOrderEntry<TGroup = unknown> =
   | {
       kind: 'node';
       node: NodeEntity;
       group: TGroup;
-      stableOrder: number;
     }
   | {
       kind: 'connector';
       connector: ConnectorEntity;
       group: TGroup;
       anchorNode: NodeEntity | null;
-      stableOrder: number;
     };
 
 /**
@@ -55,7 +54,7 @@ export function resolveNodeAncestryChain(
  * 基于画框树状层级比较两个节点的前后顺序
  * 规则：
  * 1. 祖先节点永远排在子孙节点下方 (父背景在底，子节点在顶)；
- * 2. 同级分叉点按 zIndex 升序比较。
+ * 2. 同级分叉点按分数索引升序比较，键相同时按 id 决胜 (各客户端结果一致，除同一节点外从不返回 0)。
  */
 export function compareHierarchicalNodes(
   left: NodeEntity,
@@ -89,11 +88,10 @@ export function compareHierarchicalNodes(
   // right 是 left 的祖先容器：right 更低，left 更高
   if (index === rightChain.length) return 1;
 
-  // 相同深度的第一个分叉点，按 zIndex 判定
-  const diff = leftChain[index].zIndex - rightChain[index].zIndex;
-  if (diff !== 0) return diff;
-
-  return 0;
+  // 相同深度的第一个分叉点 (互为兄弟)，按分数索引判定
+  const leftFork = leftChain[index];
+  const rightFork = rightChain[index];
+  return compareFractionalIndex(leftFork.zIndex, leftFork.id, rightFork.zIndex, rightFork.id);
 }
 
 /**
@@ -124,17 +122,14 @@ export function compareContentLayerEntries(
   const leftAnchor = left.kind === 'node' ? left.node : left.anchorNode;
   const rightAnchor = right.kind === 'node' ? right.node : right.anchorNode;
 
-  let order = 0;
+  let order: number;
   if (leftAnchor && rightAnchor) {
     order = compareNodes(leftAnchor, rightAnchor);
   } else {
-    const leftZ =
-      leftAnchor?.zIndex ??
-      (left.kind === 'connector' ? left.connector.zIndex : left.node.zIndex);
-    const rightZ =
-      rightAnchor?.zIndex ??
-      (right.kind === 'connector' ? right.connector.zIndex : right.node.zIndex);
-    order = leftZ - rightZ;
+    // 悬空连线 (两端节点均不存在) 以自身索引参与排序
+    const leftRef = leftAnchor ?? (left.kind === 'connector' ? left.connector : left.node);
+    const rightRef = rightAnchor ?? (right.kind === 'connector' ? right.connector : right.node);
+    order = compareFractionalIndex(leftRef.zIndex, leftRef.id, rightRef.zIndex, rightRef.id);
   }
 
   if (order !== 0) return order;
@@ -146,12 +141,8 @@ export function compareContentLayerEntries(
     }
   }
 
-  // 2. 均为连线时按连线自身 zIndex 比较
-  if (left.kind === 'connector' && right.kind === 'connector') {
-    const connectorOrder = left.connector.zIndex - right.connector.zIndex;
-    if (connectorOrder !== 0) return connectorOrder;
-  }
-
-  // 3. 跨不同锚点但同分、或同类图元：保持稳定输入次序保全传递性
-  return left.stableOrder - right.stableOrder;
+  // 2. 伴生到同一节点的多条连线：按连线自身索引与 id 排序
+  const leftEntity = left.kind === 'connector' ? left.connector : left.node;
+  const rightEntity = right.kind === 'connector' ? right.connector : right.node;
+  return compareFractionalIndex(leftEntity.zIndex, leftEntity.id, rightEntity.zIndex, rightEntity.id);
 }

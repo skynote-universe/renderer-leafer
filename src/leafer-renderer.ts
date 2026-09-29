@@ -45,7 +45,6 @@ import {
 import { compareHierarchicalNodes } from './layering/content-layer-order';
 import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
-import { StableOrder } from './layers/stable-order';
 import { syncContentOrder } from './layers/content-order-sync';
 
 const EPHEMERAL_ESCAPE_SCOPE_ID = 'renderer:ephemeral-escape';
@@ -70,7 +69,6 @@ export class LeaferRenderer {
 
   private readonly dpr: number;
   private readonly offscreenCacheLimit: number;
-  private readonly stableOrder = new StableOrder();
   private readonly frameScheduler: FrameCommitScheduler;
   private readonly lodController: AdaptiveLodController;
   private isInteracting = false;
@@ -137,14 +135,12 @@ export class LeaferRenderer {
       contentLayer: this.contentLayer,
       engine: this.engine,
       renderers: this.nodeRenderers,
-      stableOrder: this.stableOrder,
       dpr: this.dpr,
       offscreenCacheLimit: this.offscreenCacheLimit
     });
     this.connectorLayer = new ConnectorLayer({
       contentLayer: this.contentLayer,
       engine: this.engine,
-      stableOrder: this.stableOrder,
       offscreenCacheLimit: this.offscreenCacheLimit
     });
 
@@ -324,7 +320,7 @@ export class LeaferRenderer {
 
     // 6. 层级同步 (伴生锚定与父子关系)
     if (this.contentOrderDirty) {
-      syncContentOrder(contentLayer, nodeLayer, connectorLayer, entityStore, this.stableOrder);
+      syncContentOrder(contentLayer, nodeLayer, connectorLayer, entityStore);
       this.contentOrderDirty = false;
     }
 
@@ -353,8 +349,7 @@ export class LeaferRenderer {
         top = node;
         continue;
       }
-      const order = compareHierarchicalNodes(node, top, getNode, chainCache);
-      if (order > 0 || (order === 0 && this.stableOrder.get(node.id) > this.stableOrder.get(top.id))) {
+      if (compareHierarchicalNodes(node, top, getNode, chainCache) > 0) {
         top = node;
       }
     }

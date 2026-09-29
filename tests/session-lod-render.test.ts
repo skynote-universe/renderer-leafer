@@ -7,7 +7,7 @@ import { createLeaferRenderer, type LeaferRenderer } from '../src/leafer-rendere
 import type { LeaferRenderContext } from '../src/types';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
-  return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 1, locked: false };
+  return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
@@ -74,7 +74,7 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
       connectorType: 'straight',
       from: { nodeId: 'a' },
       to: { nodeId: 'b' },
-      zIndex: 0,
+      zIndex: 'a0',
       locked: false
     };
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });

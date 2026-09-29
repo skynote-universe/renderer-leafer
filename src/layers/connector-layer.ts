@@ -8,12 +8,10 @@ import type { SkyNoteEngine, CanvasTheme } from '@skynote/core';
 import type { ConnectorRenderCache } from '../types';
 import { renderConnector } from '../connector/connector-renderer';
 import { VisibilityTracker } from './visibility-tracker';
-import type { StableOrder } from './stable-order';
 
 export interface ConnectorLayerOptions {
   contentLayer: Group;
   engine: SkyNoteEngine;
-  stableOrder: StableOrder;
   offscreenCacheLimit: number;
 }
 
@@ -78,7 +76,6 @@ export class ConnectorLayer {
 
   destroy(connectorId: string): void {
     this.visibility.forget(connectorId);
-    this.options.stableOrder.release(connectorId);
     // 原生连线渲染器尚未接入，缓存中的图元均由默认线型创建，不交给原生 destroy 释放
     this.caches.get(connectorId)?.group.remove();
     this.caches.delete(connectorId);
