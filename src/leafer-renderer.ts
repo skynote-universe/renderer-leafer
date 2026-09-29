@@ -45,7 +45,7 @@ import {
 import { compareHierarchicalNodes } from './layering/content-layer-order';
 import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
-import { syncContentOrder } from './layers/content-order-sync';
+import { ContentOrderSync } from './layers/content-order-sync';
 
 const EPHEMERAL_ESCAPE_SCOPE_ID = 'renderer:ephemeral-escape';
 const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
@@ -64,6 +64,7 @@ export class LeaferRenderer {
   private contentLayer: Group | null = null;
   private nodeLayer: NodeLayer | null = null;
   private connectorLayer: ConnectorLayer | null = null;
+  private contentOrder: ContentOrderSync | null = null;
   private ephemeralChannel: EphemeralChannel | null = null;
   private hostBridge: DOMHostBridge | null = null;
 
@@ -73,7 +74,8 @@ export class LeaferRenderer {
   private readonly lodController: AdaptiveLodController;
   private isInteracting = false;
   private currentLodLevel: SkyNoteLodLevel = 'full';
-  private contentOrderDirty = true;
+  /** 文档层级发生变化 (或首帧)：下一帧需全量重排；平时只为新挂载的实体定位插入 */
+  private layerOrderInvalidated = true;
   /** 自上一帧以来被删除、待销毁图元缓存的实体 */
   private readonly pendingRemovedNodeIds = new Set<string>();
   private readonly pendingRemovedConnectorIds = new Set<string>();
@@ -144,6 +146,8 @@ export class LeaferRenderer {
       offscreenCacheLimit: this.offscreenCacheLimit
     });
 
+    this.contentOrder = new ContentOrderSync(this.contentLayer, this.nodeLayer, this.connectorLayer, this.engine.entityStore);
+
     // 3. 宿主事件网桥与交互态感知
     this.hostBridge = new DOMHostBridge({
       container,
@@ -166,7 +170,7 @@ export class LeaferRenderer {
     this.unsubscribeDoc = this.engine.documentStore.subscribe((_view, _record, changes) => {
       for (const id of changes.nodes.removed) this.pendingRemovedNodeIds.add(id);
       for (const id of changes.connectors.removed) this.pendingRemovedConnectorIds.add(id);
-      if (changes.orderChanged) this.contentOrderDirty = true;
+      if (changes.orderChanged) this.layerOrderInvalidated = true;
       this.requestRender();
     });
 
@@ -238,8 +242,8 @@ export class LeaferRenderer {
    * 开销只与视锥内实体数和本帧删除数相关，与画布总规模无关
    */
   renderFrame(): void {
-    const { contentLayer, nodeLayer, connectorLayer } = this;
-    if (this.isDestroyed || !contentLayer || !nodeLayer || !connectorLayer) return;
+    const { nodeLayer, connectorLayer, contentOrder } = this;
+    if (this.isDestroyed || !nodeLayer || !connectorLayer || !contentOrder) return;
     if (this.scheduledRafId !== null) {
       cancelAnimationFrame(this.scheduledRafId);
       this.scheduledRafId = null;
@@ -296,7 +300,7 @@ export class LeaferRenderer {
       connectorPriorityIds: Array.from(session.selectedConnectorIds)
     });
 
-    // 5. 节点与连线图层增量同步，有实体新进入场景时需重排层级
+    // 5. 节点与连线图层增量同步，有实体新进入场景时需为其定位层级
     const context: LeaferRenderContext = {
       viewport,
       isInteracting: this.isInteracting,
@@ -304,24 +308,22 @@ export class LeaferRenderer {
       selectedConnectorIds: session.selectedConnectorIds,
       theme: session.theme
     };
-    if (
-      nodeLayer.sync(
-        visibleNodeIds,
-        (id) => frameResult.committedNodeIds.has(id),
-        context,
-        lodState.level === 'full' ? 'full' : 'placeholder'
-      )
-    ) {
-      this.contentOrderDirty = true;
-    }
-    if (connectorLayer.sync(visibleConnectorIds, (id) => frameResult.committedConnectorIds.has(id), session.theme)) {
-      this.contentOrderDirty = true;
-    }
+    const nodesEntered = nodeLayer.sync(
+      visibleNodeIds,
+      (id) => frameResult.committedNodeIds.has(id),
+      context,
+      lodState.level === 'full' ? 'full' : 'placeholder'
+    );
+    const connectorsEntered = connectorLayer.sync(
+      visibleConnectorIds,
+      (id) => frameResult.committedConnectorIds.has(id),
+      session.theme
+    );
 
-    // 6. 层级同步 (伴生锚定与父子关系)
-    if (this.contentOrderDirty) {
-      syncContentOrder(contentLayer, nodeLayer, connectorLayer, entityStore);
-      this.contentOrderDirty = false;
+    // 6. 层级同步：文档层级变化时全量排序并最少移动，否则只插入新挂载的实体
+    if (this.layerOrderInvalidated || nodesEntered || connectorsEntered) {
+      contentOrder.sync(this.layerOrderInvalidated);
+      this.layerOrderInvalidated = false;
     }
 
     // 7. 帧耗时度量，分帧队列未清空时继续调度
@@ -461,6 +463,7 @@ export class LeaferRenderer {
     this.ephemeralChannel?.destroy();
     this.ephemeralChannel = null;
 
+    this.contentOrder = null;
     this.nodeLayer?.destroyAll();
     this.nodeLayer = null;
     this.connectorLayer?.destroyAll();

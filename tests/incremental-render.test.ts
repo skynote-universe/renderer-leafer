@@ -38,7 +38,7 @@ describe('LeaferRenderer 增量渲染', () => {
     const renderSpy = vi.spyOn(renderer, 'renderFrame');
 
     for (let i = 0; i < 10; i++) {
-      engine.documentStore.moveNode('a', { x: 1 }, { groupId: 'drag' });
+      engine.documentStore.moveNodes(['a'], { x: 1 }, { groupId: 'drag' });
     }
     expect(renderSpy).not.toHaveBeenCalled();
 
@@ -76,7 +76,7 @@ describe('LeaferRenderer 增量渲染', () => {
     const contentLayer = renderer.getContentLayer()!;
     const originalGroup = contentLayer.children[0];
 
-    engine.documentStore.removeNode('a');
+    engine.documentStore.removeNodes(['a']);
     renderer.renderFrame();
     expect(contentLayer.children.length).toBe(0);
 
