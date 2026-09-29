@@ -15,4 +15,5 @@ export * from './scheduler/adaptive-lod';
 export * from './scheduler/frame-commit-scheduler';
 export * from './scheduler/display-object-budget';
 export * from './layering/content-layer-order';
+export * from './text/leafer-text-measurer';
 export * from './leafer-renderer';
