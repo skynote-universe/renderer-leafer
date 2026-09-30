@@ -155,6 +155,9 @@ export class DOMHostBridge implements CanvasHost {
     // 任一祖先滚动或窗口尺寸变化都会让容器的视口位置失效
     window.addEventListener('scroll', this.invalidateContainerRect, { signal, capture: true, passive: true });
     window.addEventListener('resize', this.invalidateContainerRect, { signal, passive: true });
+    // 失焦后 keyup 不会到达：切走窗口或焦点移出画布时通知焦点栈复位按键状态 (如按住的空格)
+    window.addEventListener('blur', this.handleBlur, { signal });
+    this.container.addEventListener('blur', this.handleBlur, { signal });
     if (typeof ResizeObserver !== 'undefined') {
       this.resizeObserver = new ResizeObserver(this.invalidateContainerRect);
       this.resizeObserver.observe(this.container);
@@ -235,6 +238,10 @@ export class DOMHostBridge implements CanvasHost {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (isEditableTarget(e.target)) return;
     this.engine.inputScopes.dispatchKeyDown(this.toCanvasKeyboardEvent(e));
+  };
+
+  private handleBlur = (): void => {
+    this.engine.inputScopes.dispatchBlur();
   };
 
   private handleKeyUp = (e: KeyboardEvent): void => {

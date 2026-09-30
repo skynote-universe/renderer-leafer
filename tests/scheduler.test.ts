@@ -87,4 +87,32 @@ describe('Renderer Schedulers', () => {
     });
     expect(stateLowZoom.level).toBe('minimal');
   });
+
+  it('AdaptiveLodController 计时降级只在样本充足且场景够大时生效，小场景的慢帧不降级', () => {
+    const input = {
+      now: 0,
+      zoom: 1,
+      documentNodes: 20,
+      documentConnectors: 0,
+      visibleNodes: 20,
+      visibleConnectors: 0,
+      nodeObjects: 20,
+      connectorObjects: 0,
+      isInteracting: true
+    };
+
+    // 小场景：即使持续慢帧也保持完整内容 (降级省不下时间，只会让画面闪烁)
+    const small = new AdaptiveLodController();
+    for (let i = 0; i < 40; i++) small.recordFrame(30, i * 16);
+    expect(small.evaluate({ ...input, now: 640 }).level).toBe('full');
+
+    // 大场景：单个慢帧不足以判定
+    const large = new AdaptiveLodController();
+    const busy = { ...input, visibleNodes: 1000, nodeObjects: 1000, documentNodes: 1000 };
+    large.recordFrame(30, 0);
+    expect(large.evaluate({ ...busy, now: 16 }).level).toBe('full');
+    // 样本充足且持续慢帧时降级
+    for (let i = 1; i < 30; i++) large.recordFrame(30, i * 16);
+    expect(large.evaluate({ ...busy, now: 480 }).level).toBe('minimal');
+  });
 });

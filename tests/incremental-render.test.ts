@@ -212,4 +212,46 @@ describe('LeaferRenderer 增量渲染', () => {
     expect(contentLayer.children).toHaveLength(1);
     renderer.destroy();
   });
+
+  it('尺寸变化重建内容图元 (compose 依赖宽高)，单纯移动只更新外层变换', () => {
+    const engine = new SkyNoteEngine();
+    engine.documentStore.addNode(makeNode('a', 0));
+    const renderer = mountRenderer(engine, { enableFrameScheduler: false });
+    const outer = () => renderer.contentLayer.children[0] as unknown as { x: number; children: { children: Rect[] }[] };
+    const rect = () => outer().children[0].children[0];
+    expect(rect().width).toBe(50);
+
+    engine.documentStore.updateNode('a', { width: 120 });
+    renderer.renderFrame();
+    expect(rect().width).toBe(120);
+
+    const before = rect();
+    engine.documentStore.moveNodes(['a'], { x: 30 });
+    renderer.renderFrame();
+    expect(outer().x).toBe(30);
+    expect(rect()).toBe(before);
+    renderer.destroy();
+  });
+
+  it('节点类型声明 clipContent 时内容图元放进裁剪盒，尺寸随外框同步', () => {
+    const engine = new SkyNoteEngine();
+    engine.nodeTypes.register({
+      type: 'clipped',
+      label: '裁剪',
+      defaultData: {},
+      clipContent: true,
+      compose: (node) => [{ kind: 'rect', x: -20, y: -20, width: node.width + 40, height: node.height + 40 }]
+    });
+    engine.documentStore.addNode(makeNode('a', 0, { nodeType: 'clipped' }));
+    const renderer = mountRenderer(engine, { enableFrameScheduler: false });
+    const content = () =>
+      (renderer.contentLayer.children[0] as unknown as { children: { overflow: string; width: number }[] }).children[0];
+    expect(content().overflow).toBe('hide');
+    expect(content().width).toBe(50);
+
+    engine.documentStore.updateNode('a', { width: 80 });
+    renderer.renderFrame();
+    expect(content().width).toBe(80);
+    renderer.destroy();
+  });
 });

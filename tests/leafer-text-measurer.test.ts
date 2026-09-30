@@ -21,6 +21,8 @@ describe('LeaferTextMeasurer', () => {
     expect(long.width).toBe(200);
 
     expect(measure('hello hello').width).toBeGreaterThan(measure('hello').width);
+    // 折行宽度为 0 时没有放文字的空间，与绘制一致 (而不是被 Leafer 当作不折行量成整段单行)
+    expect(measure('hello '.repeat(40), 0)).toEqual({ width: 0, height: 0 });
   });
 
   it('注入引擎后，height-driven 节点随文本变长自动撑高', () => {

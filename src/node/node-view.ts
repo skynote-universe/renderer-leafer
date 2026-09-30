@@ -3,10 +3,11 @@
  * @description 单个节点的原生图元：外层变换、内容图元与子容器，按双版本号就地更新
  *
  * 设计考量 (Why):
- * 1. 双版本号守卫：几何版本变化只更新外层变换，数据版本、主题或细节档位变化才重建内容；
+ * 1. 双版本号守卫：移动与旋转只更新外层变换；数据版本、尺寸 (compose 图元依赖宽高)、主题或细节档位变化才重建内容；
  *    选中态不参与 (ADR-110)，框选上千节点不触发任何内容重建。
  * 2. 单节点崩溃防白屏：内容渲染异常局部捕获并降级为占位框，直到数据或主题再次变化才重试，避免每帧重复抛错。
- * 3. 旋转约定：绕节点中心旋转，x / y 为未旋转框左上角在父容器中的局部坐标 (origin 不改变定位，around 会改变)。
+ * 3. 内容裁剪：节点类型声明 clipContent 时，内容图元放进 overflow: 'hide' 的 Box，超出外框的部分不绘制。
+ * 4. 旋转约定：绕节点中心旋转，x / y 为未旋转框左上角在父容器中的局部坐标 (origin 不改变定位，around 会改变)。
  */
 
 import { Box, Group } from 'leafer';
@@ -41,12 +42,16 @@ function resolveNodeFill(fill: NodeFill | undefined, theme: CanvasTheme, fallbac
 export class NodeView {
   /** 外层图元：承载节点变换，挂在父容器的子容器 (或根内容层) 中 */
   readonly group = new Group();
-  private readonly content = new Group();
+  /** 内容图元的容器；裁剪型节点为随外框同步尺寸的 Box */
+  private readonly content: Group;
   private childrenGroup: Group | null = null;
   private shapes: LeaferShape[] = [];
   private node: Readonly<NodeEntity>;
   private geomVersion = -1;
   private dataVersion = -1;
+  /** 内容图元按此尺寸生成：移动不改尺寸，不必重建 */
+  private contentWidth = -1;
+  private contentHeight = -1;
   private theme: CanvasTheme | null = null;
   /** 当前内容档位；broken 为渲染崩溃后的降级占位框 */
   private detail: NodeRenderDetail | 'broken' | null = null;
@@ -56,6 +61,9 @@ export class NodeView {
     node: Readonly<NodeEntity>
   ) {
     this.node = node;
+    this.content = env.nodeTypes.get(node.nodeType)?.clipContent
+      ? new Box({ width: node.width, height: node.height, overflow: 'hide' })
+      : new Group();
     this.group.add(this.content);
   }
 
@@ -90,13 +98,24 @@ export class NodeView {
         origin: 'center'
       });
       if (this.childrenGroup instanceof Box) this.childrenGroup.set({ width: node.width, height: node.height });
+      if (this.content instanceof Box) this.content.set({ width: node.width, height: node.height });
       this.geomVersion = versions.geomVersion;
     }
 
-    // 已崩溃降级的节点视同占位档位，只在数据或主题变化时重试
+    // 已崩溃降级的节点视同占位档位，只在数据、尺寸或主题变化时重试
     const renderedDetail = this.detail === 'broken' ? detail : this.detail;
-    if (versions.dataVersion === this.dataVersion && context.theme === this.theme && renderedDetail === detail) return;
+    const sizeChanged = node.width !== this.contentWidth || node.height !== this.contentHeight;
+    if (
+      versions.dataVersion === this.dataVersion &&
+      !sizeChanged &&
+      context.theme === this.theme &&
+      renderedDetail === detail
+    ) {
+      return;
+    }
     this.dataVersion = versions.dataVersion;
+    this.contentWidth = node.width;
+    this.contentHeight = node.height;
     this.theme = context.theme;
     this.renderContent(context, detail);
   }

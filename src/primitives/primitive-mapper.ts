@@ -142,6 +142,8 @@ function describe(p: CanvasPrimitive): ShapeSpec {
           textWrap: p.textWrap && LEAFER_TEXT_WRAP[p.textWrap],
           textDecoration: toLeaferTextDecoration(p.textDecoration),
           textOverflow: p.textOverflow && LEAFER_TEXT_OVERFLOW[p.textOverflow],
+          // Leafer 把宽或高为 0 视同未设置 (不折行、不裁剪，整段画成一行)：排版框为 0 时没有放文字的空间，不绘制
+          visible: (p.width === undefined || p.width > 0) && (p.height === undefined || p.height > 0),
           opacity
         }
       };

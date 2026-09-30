@@ -16,6 +16,15 @@ export interface AdaptiveLodOptions {
   enabled: boolean;
   sampleWindowMs: number;
   recoveryDelayMs: number;
+  /**
+   * 计时类降级至少需要的帧样本数：样本太少时 P95 就是个别慢帧 (首次排版、GC)，据此降级会误判
+   */
+  timingMinSamples: number;
+  /**
+   * 计时类降级要求的最少可见实体数 (节点 + 连线)：小场景的慢帧不是实体数量造成的，降级省不下时间，
+   * 反而要把全部内容换成占位块再换回来，这两次重建本身就会让画面闪烁
+   */
+  timingMinVisibleEntities: number;
   reducedRenderP95Ms: number;
   minimalRenderP95Ms: number;
   reducedVisibleNodes: number;
@@ -54,6 +63,8 @@ export const DEFAULT_ADAPTIVE_LOD_OPTIONS: Readonly<AdaptiveLodOptions> = Object
   enabled: true,
   sampleWindowMs: 2_000,
   recoveryDelayMs: 800,
+  timingMinSamples: 20,
+  timingMinVisibleEntities: 300,
   reducedRenderP95Ms: 16,
   minimalRenderP95Ms: 28,
   reducedVisibleNodes: 1_200,
@@ -187,18 +198,26 @@ export class AdaptiveLodController {
       promote('reduced', 'connector-object-pressure');
     }
 
-    if (this.options.enabled) {
+    const timingReliable =
+      this.samples.length >= this.options.timingMinSamples &&
+      input.visibleNodes + input.visibleConnectors >= this.options.timingMinVisibleEntities;
+    if (this.options.enabled && timingReliable) {
       if (renderP95Ms >= this.options.minimalRenderP95Ms) {
         promote('minimal', 'render-time-pressure');
       } else if (renderP95Ms >= this.options.reducedRenderP95Ms) {
         promote('reduced', 'render-time-pressure');
       }
-      if (input.isInteracting && (input.documentNodes >= 5_000 || input.documentConnectors >= 3_000)) {
-        promote('reduced', 'active-interaction');
-      }
       if (input.isInteracting && renderP95Ms >= 20) {
         promote('minimal', 'interaction-frame-pressure');
       }
+    }
+
+    if (
+      this.options.enabled &&
+      input.isInteracting &&
+      (input.documentNodes >= 5_000 || input.documentConnectors >= 3_000)
+    ) {
+      promote('reduced', 'active-interaction');
     }
 
     return { level, reasons };
@@ -218,6 +237,8 @@ function normalizeOptions(options: Partial<AdaptiveLodOptions>): AdaptiveLodOpti
     enabled: merged.enabled !== false,
     sampleWindowMs: positive(merged.sampleWindowMs, 2_000),
     recoveryDelayMs: positive(merged.recoveryDelayMs, 800),
+    timingMinSamples: positive(merged.timingMinSamples, 20),
+    timingMinVisibleEntities: positive(merged.timingMinVisibleEntities, 300),
     reducedRenderP95Ms: positive(merged.reducedRenderP95Ms, 16),
     minimalRenderP95Ms: positive(merged.minimalRenderP95Ms, 28),
     reducedVisibleNodes: positive(merged.reducedVisibleNodes, 1_200),

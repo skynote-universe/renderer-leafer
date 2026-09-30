@@ -20,6 +20,8 @@ export class LeaferTextMeasurer implements TextMeasurer {
   private probe: Text | null = null;
 
   measure(request: TextMeasureRequest): TextBlockMetrics {
+    // 与绘制一致：折行宽度为 0 时没有放文字的空间 (Leafer 会把 0 当作不折行，量出整段单行的尺寸)
+    if (request.maxWidth !== undefined && request.maxWidth <= 0) return { width: 0, height: 0 };
     const primitive = createTextBlockPrimitive(request.block, request.style, {
       x: 0,
       y: 0,

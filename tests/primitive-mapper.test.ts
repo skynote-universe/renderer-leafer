@@ -90,6 +90,19 @@ describe('Primitive Mapper', () => {
     expect(textShape.textOverflow).toBe('ellipsis');
   });
 
+  it('排版框宽或高为 0 的文字不绘制 (Leafer 会把 0 当作未设置而画成整段单行)，框恢复后重新显示', () => {
+    const base: CanvasPrimitive = { kind: 'text', x: 0, y: 0, text: '很长的一段文字', width: 0, height: 20 };
+    const shape = createLeaferShape(base) as TextShape;
+    expect(shape.visible).toBe(false);
+    updateLeaferShape(shape, { ...base, width: 50, height: 0 });
+    expect(shape.visible).toBe(false);
+    updateLeaferShape(shape, { ...base, width: 50 });
+    expect(shape.visible).toBe(true);
+    // 不限宽高 (适应内容) 照常绘制
+    updateLeaferShape(shape, { ...base, width: undefined, height: undefined });
+    expect(shape.visible).toBe(true);
+  });
+
   it('updateLeaferShape 就地覆写已有图元，避免 GC 掉帧', () => {
     const rectShape = new Rect({ x: 0, y: 0, width: 100, height: 50, fill: '#FFFFFF' });
     const targetRect: CanvasPrimitive = {
