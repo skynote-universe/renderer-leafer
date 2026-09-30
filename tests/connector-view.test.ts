@@ -245,6 +245,7 @@ describe('ConnectorView', () => {
     // 空心箭头应填充白色背景底色，描边为连线颜色
     const endMarker = view.endMarker as any;
     expect(endMarker).toBeInstanceOf(Path);
+    expect(endMarker.path).toBeDefined();
     expect(endMarker.fill).toBe('#FFFFFF');
     expect(endMarker.stroke).toBe('#0055FF');
   });

@@ -61,10 +61,10 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
 
-const { Group, Rect, Text, Box } = await import('leafer');
+const { Group, Rect, Text, Box, Image, Path } = await import('leafer');
 type TextShape = InstanceType<typeof Text>;
 type RectShape = InstanceType<typeof Rect>;
-const { createLeaferShapeFromPrimitive, updateLeaferShapeInPlace, reconcileLeaferShapes } =
+const { createLeaferShape, updateLeaferShape, reconcileLeaferShapes } =
   await import('../src/primitives/primitive-mapper');
 
 describe('Primitive Mapper', () => {
@@ -80,7 +80,7 @@ describe('Primitive Mapper', () => {
       textOverflow: 'ellipsis'
     };
 
-    const textShape = createLeaferShapeFromPrimitive(textPrimitive) as TextShape;
+    const textShape = createLeaferShape(textPrimitive) as TextShape;
     expect(textShape).toBeInstanceOf(Text);
     expect(textShape.text).toBe('SkyNote Architecture');
     expect(textShape.x).toBe(10);
@@ -90,7 +90,7 @@ describe('Primitive Mapper', () => {
     expect(textShape.textOverflow).toBe('ellipsis');
   });
 
-  it('updateLeaferShapeInPlace 就地覆写已有图元，避免 GC 掉帧', () => {
+  it('updateLeaferShape 就地覆写已有图元，避免 GC 掉帧', () => {
     const rectShape = new Rect({ x: 0, y: 0, width: 100, height: 50, fill: '#FFFFFF' });
     const targetRect: CanvasPrimitive = {
       kind: 'rect',
@@ -101,7 +101,7 @@ describe('Primitive Mapper', () => {
       fill: '#FF0000'
     };
 
-    const updated = updateLeaferShapeInPlace(rectShape, targetRect);
+    const updated = updateLeaferShape(rectShape, targetRect);
     expect(updated).toBe(true);
     expect(rectShape.x).toBe(20);
     expect(rectShape.y).toBe(30);
@@ -110,7 +110,7 @@ describe('Primitive Mapper', () => {
     expect(rectShape.fill).toBe('#FF0000');
 
     // 类型不匹配时安全返回 false
-    const mismatch = updateLeaferShapeInPlace(rectShape, {
+    const mismatch = updateLeaferShape(rectShape, {
       kind: 'circle',
       cx: 10,
       cy: 10,
@@ -119,7 +119,7 @@ describe('Primitive Mapper', () => {
     expect(mismatch).toBe(false);
   });
 
-  it('updateLeaferShapeInPlace 对 Box 和 Group 的 children 进行深度递归同步', () => {
+  it('updateLeaferShape 对 Box 和 Group 的 children 进行深度递归同步', () => {
     const boxShape = new Box({ x: 0, y: 0, width: 100, height: 100 });
     const childRect = new Rect({ x: 0, y: 0, width: 20, height: 20, fill: '#000000' });
     boxShape.add(childRect);
@@ -142,7 +142,7 @@ describe('Primitive Mapper', () => {
       ]
     };
 
-    const updated = updateLeaferShapeInPlace(boxShape, targetBox);
+    const updated = updateLeaferShape(boxShape, targetBox);
     expect(updated).toBe(true);
     expect(boxShape.x).toBe(10);
     expect(boxShape.children.length).toBe(1);
@@ -182,5 +182,36 @@ describe('Primitive Mapper', () => {
 
     // 索引 2 为新增 Line
     expect(parent.children[2].tag).toBe('Line');
+  });
+
+  it('路径图元写入 Leafer 的 path 属性 (Leafer 没有 d 属性，写 d 时什么都不画)', () => {
+    const shape = createLeaferShape({ kind: 'path', d: 'M 0 0 L 10 10', stroke: '#000000', fillRule: 'evenodd' });
+    expect(shape).toBeInstanceOf(Path);
+    expect((shape as InstanceType<typeof Path>).path).toBeDefined();
+    expect((shape as unknown as { windingRule?: string }).windingRule).toBe('evenodd');
+  });
+
+  it('fillOpacity 转为纯色画笔的透明度，只淡化填充不影响描边', () => {
+    const shape = createLeaferShape({
+      kind: 'rect',
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      fill: '#3366FF',
+      fillOpacity: 0.08,
+      stroke: '#3366FF'
+    }) as RectShape;
+    expect(shape.fill).toEqual({ type: 'solid', color: '#3366FF', opacity: 0.08 });
+    expect(shape.stroke).toBe('#3366FF');
+    expect(shape.opacity).toBe(1);
+  });
+
+  it('只复用同一个类的图元：图片继承自矩形、盒子继承自分组，也不能互相复用', () => {
+    const image = new Image({ url: 'https://example.com/a.png', width: 10, height: 10 });
+    expect(updateLeaferShape(image, { kind: 'rect', x: 0, y: 0, width: 10, height: 10 })).toBe(false);
+    const box = new Box();
+    expect(updateLeaferShape(box, { kind: 'group', children: [] })).toBe(false);
+    expect(updateLeaferShape(new Group(), { kind: 'group', children: [] })).toBe(true);
   });
 });

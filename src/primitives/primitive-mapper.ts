@@ -1,534 +1,291 @@
 /**
  * @file primitive-mapper.ts
- * @description 声明式跨引擎中间图元 (CanvasPrimitive) 到 Leafer 图元的高性能映射与就地复用器
+ * @description 声明式图元 (CanvasPrimitive) → Leafer 图元：新建、就地更新与列表对齐
  *
- * 遵守 AGENTS.md 性能军规：
- * 1. 就地复用：更新阶段优先修改已有图元属性，严禁反复 new Rect() 触发 GC 掉帧；
- * 2. 物理像素对齐：对 1px 细线进行 DPR 栅格对齐；
- * 3. 极速分支：识别简单文本与纯色填充，走极速通道；
- * 4. 零遗漏：全量覆盖所有 CanvasPrimitive 基础图元 (含图片、盒子、多边形等)。
+ * 设计考量 (Why):
+ * 1. 每种图元只有一份属性映射：新建是 new Shape(props)，更新是 shape.set(props)，两条路径不会分叉。
+ * 2. 更新只复用同一个类的图元 (按构造函数精确匹配)：Image 继承 Rect、Box 继承 Group，用 instanceof 会把
+ *    图片当矩形、盒子当分组复用，属性错位。
+ * 3. 未设置的可选字段显式写入默认值 (如 opacity 为 1)，就地更新时不会残留上一次的值。
+ * 4. 像素对齐由 Leafer 画布的 pixelSnap 在绘制时按屏幕像素完成，这里保持世界坐标原值。
  */
 
 import type {
   CanvasPrimitive,
-  RectPrimitive,
-  TextPrimitive,
-  CirclePrimitive,
-  EllipsePrimitive,
-  PolygonPrimitive,
-  PathPrimitive,
-  LinePrimitive,
-  ImagePrimitive,
-  GroupPrimitive,
-  BoxPrimitive,
   FontWeight,
   LineHeight,
+  OverflowMode,
+  StrokeAlign,
   StrokeCap,
-  TextWrap,
+  StrokeJoin,
   TextDecoration,
-  TextOverflow
+  TextOverflow,
+  TextWrap
 } from '@skynote/core';
-import { Rect, Text, Ellipse, Polygon, Path, Line, Group, Box, Image } from 'leafer';
+import { Box, Ellipse, Group, Image, Line, Path, Polygon, Rect, Text } from 'leafer';
+import type { ISolidPaint, IUIInputData } from 'leafer';
 import type { LeaferShape } from '../types';
 
-type LeaferStrokeCap = 'round' | 'square' | 'none';
-type LeaferFontWeight = NonNullable<InstanceType<typeof Text>['fontWeight']>;
-type LeaferLineHeight = NonNullable<InstanceType<typeof Text>['lineHeight']>;
+type ShapeClass = new (props: IUIInputData) => LeaferShape;
 
-/**
- * 转换行高：数字为字号倍数 → Leafer 百分比行高；'24px' → Leafer 像素数值
- */
-function toLeaferLineHeight(lineHeight?: LineHeight): LeaferLineHeight | undefined {
-  if (lineHeight === undefined) return undefined;
-  if (typeof lineHeight === 'number') return { type: 'percent', value: lineHeight };
-  return Number.parseFloat(lineHeight);
+/** 图元描述：对应的 Leafer 类与属性 */
+interface ShapeSpec {
+  readonly Shape: ShapeClass;
+  readonly props: IUIInputData;
 }
 
-/**
- * 转换标准 FontWeight 到 Leafer
- */
-function toLeaferFontWeight(weight?: FontWeight): LeaferFontWeight | undefined {
-  if (!weight) return undefined;
+/** 可描边图元的公共字段 */
+interface StrokeFields {
+  stroke?: string;
+  strokeWidth?: number;
+  strokeDashArray?: number[];
+  strokeCap?: StrokeCap;
+  strokeJoin?: StrokeJoin;
+  strokeAlign?: StrokeAlign;
+}
+
+const LEAFER_STROKE_CAP: Record<StrokeCap, 'round' | 'square' | 'none'> = {
+  butt: 'none',
+  round: 'round',
+  square: 'square'
+};
+const LEAFER_TEXT_WRAP: Record<TextWrap, 'normal' | 'none' | 'break'> = {
+  normal: 'normal',
+  none: 'none',
+  'break-all': 'break',
+  'break-word': 'break'
+};
+const LEAFER_TEXT_OVERFLOW: Record<TextOverflow, 'show' | 'hide' | 'ellipsis'> = {
+  none: 'show',
+  clip: 'hide',
+  ellipsis: 'ellipsis'
+};
+const LEAFER_OVERFLOW: Record<OverflowMode, 'show' | 'hide'> = { visible: 'show', hidden: 'hide' };
+
+/** 描边端点映射 (连线图元同样使用) */
+export function toLeaferStrokeCap(cap: StrokeCap | undefined): 'round' | 'square' | 'none' | undefined {
+  return cap && LEAFER_STROKE_CAP[cap];
+}
+
+/** 填充：带独立透明度时转为纯色画笔，只淡化填充而不影响描边 */
+function paint(color: string | undefined, opacity: number | undefined): string | ISolidPaint | undefined {
+  return color !== undefined && opacity !== undefined ? { type: 'solid', color, opacity } : color;
+}
+
+function strokeProps(p: StrokeFields): IUIInputData {
+  return {
+    stroke: p.stroke,
+    strokeWidth: p.strokeWidth,
+    strokeDashArray: p.strokeDashArray,
+    strokeCap: toLeaferStrokeCap(p.strokeCap),
+    strokeJoin: p.strokeJoin,
+    strokeAlign: p.strokeAlign
+  };
+}
+
+/** 数字行高为字号倍数 → Leafer 百分比行高；'24px' → 像素值 */
+function toLeaferLineHeight(lineHeight: LineHeight | undefined): IUIInputData['lineHeight'] {
+  if (lineHeight === undefined) return undefined;
+  return typeof lineHeight === 'number' ? { type: 'percent', value: lineHeight } : Number.parseFloat(lineHeight);
+}
+
+function toLeaferFontWeight(weight: FontWeight | undefined): IUIInputData['fontWeight'] {
   if (weight === 'bolder') return 'bold';
   if (weight === 'lighter') return 'normal';
   return weight;
 }
 
-/**
- * 转换标准 StrokeCap 到 Leafer
- */
-function toLeaferStrokeCap(cap?: StrokeCap): LeaferStrokeCap | undefined {
-  if (!cap) return undefined;
-  if (cap === 'butt') return 'none';
-  return cap as LeaferStrokeCap;
+function toLeaferTextDecoration(decoration: TextDecoration | undefined): 'none' | 'under' | 'delete' | 'under-delete' {
+  const lines =
+    decoration === undefined || decoration === 'none' ? [] : Array.isArray(decoration) ? decoration : [decoration];
+  const under = lines.includes('underline');
+  const strike = lines.includes('line-through');
+  return under && strike ? 'under-delete' : under ? 'under' : strike ? 'delete' : 'none';
 }
 
-/**
- * 转换换行模式到 Leafer
- */
-function toLeaferTextWrap(wrap?: TextWrap): 'normal' | 'none' | 'break' | undefined {
-  if (!wrap) return undefined;
-  if (wrap === 'break-all' || wrap === 'break-word') return 'break';
-  return wrap;
-}
-
-/**
- * 转换文本装饰线 (下划线/删除线) 到 Leafer (支持单值与多选数组)
- */
-function toLeaferTextDecoration(decoration?: TextDecoration): 'none' | 'under' | 'delete' | 'under-delete' | undefined {
-  if (!decoration || decoration === 'none') return 'none';
-  const lines = Array.isArray(decoration) ? decoration : [decoration];
-  const hasUnderline = lines.includes('underline');
-  const hasLineThrough = lines.includes('line-through');
-  if (hasUnderline && hasLineThrough) return 'under-delete';
-  if (hasUnderline) return 'under';
-  if (hasLineThrough) return 'delete';
-  return 'none';
-}
-
-/**
- * 转换文本溢出模式到 Leafer
- */
-function toLeaferTextOverflow(overflow?: TextOverflow): 'show' | 'hide' | 'ellipsis' | undefined {
-  if (!overflow) return undefined;
-  if (overflow === 'clip') return 'hide';
-  if (overflow === 'none') return 'show';
-  return overflow;
-}
-
-/**
- * 将单个 CanvasPrimitive 创建为原生 Leafer 图元
- */
-export function createLeaferShapeFromPrimitive(primitive: CanvasPrimitive, dpr = 1): LeaferShape {
-  switch (primitive.kind) {
+function describe(p: CanvasPrimitive): ShapeSpec {
+  const opacity = p.opacity ?? 1;
+  switch (p.kind) {
     case 'rect':
-      return createRectShape(primitive, dpr);
+      return {
+        Shape: Rect,
+        props: {
+          x: p.x,
+          y: p.y,
+          width: Math.max(0, p.width),
+          height: Math.max(0, p.height),
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          cornerRadius: p.radius,
+          opacity
+        }
+      };
     case 'text':
-      return createTextShape(primitive);
+      return {
+        Shape: Text,
+        props: {
+          x: p.x,
+          y: p.y,
+          text: p.text,
+          width: p.width,
+          height: p.height,
+          fontSize: p.fontSize ?? 14,
+          fontFamily: p.fontFamily,
+          fontWeight: toLeaferFontWeight(p.fontWeight),
+          italic: p.fontStyle === 'italic',
+          fill: p.fill,
+          textAlign: p.textAlign,
+          verticalAlign: p.verticalAlign,
+          textBaseline: p.textBaseline,
+          lineHeight: toLeaferLineHeight(p.lineHeight),
+          letterSpacing: p.letterSpacing,
+          textWrap: p.textWrap && LEAFER_TEXT_WRAP[p.textWrap],
+          textDecoration: toLeaferTextDecoration(p.textDecoration),
+          textOverflow: p.textOverflow && LEAFER_TEXT_OVERFLOW[p.textOverflow],
+          opacity
+        }
+      };
     case 'circle':
-      return createCircleShape(primitive, dpr);
+      return {
+        Shape: Ellipse,
+        props: {
+          x: p.cx - p.r,
+          y: p.cy - p.r,
+          width: p.r * 2,
+          height: p.r * 2,
+          rotation: 0,
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          opacity
+        }
+      };
     case 'ellipse':
-      return createEllipseShape(primitive, dpr);
+      return {
+        Shape: Ellipse,
+        props: {
+          x: p.cx - p.rx,
+          y: p.cy - p.ry,
+          width: p.rx * 2,
+          height: p.ry * 2,
+          rotation: p.rotation ?? 0,
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          opacity
+        }
+      };
     case 'polygon':
-      return createPolygonShape(primitive, dpr);
+      return {
+        Shape: Polygon,
+        props: {
+          points: p.points,
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          cornerRadius: p.cornerRadius,
+          opacity
+        }
+      };
     case 'path':
-      return createPathShape(primitive, dpr);
+      return {
+        Shape: Path,
+        props: {
+          // Leafer 的路径属性名为 path (没有 d)
+          path: p.d,
+          windingRule: p.fillRule,
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          opacity
+        }
+      };
     case 'line':
-      return createLineShape(primitive, dpr);
+      return {
+        Shape: Line,
+        props: {
+          points: p.points,
+          ...strokeProps(p),
+          strokeWidth: p.strokeWidth ?? 1,
+          cornerRadius: p.cornerRadius,
+          opacity
+        }
+      };
     case 'image':
-      return createImageShape(primitive, dpr);
+      return {
+        Shape: Image,
+        props: {
+          url: p.url,
+          x: p.x,
+          y: p.y,
+          width: p.width,
+          height: p.height,
+          cornerRadius: p.radius,
+          opacity
+        }
+      };
     case 'group':
-      return createGroupShape(primitive, dpr);
+      return { Shape: Group, props: { x: p.x ?? 0, y: p.y ?? 0, rotation: p.rotation ?? 0, opacity } };
     case 'box':
-      return createBoxShape(primitive, dpr);
-    default:
-      return new Group();
+      return {
+        Shape: Box,
+        props: {
+          x: p.x,
+          y: p.y,
+          width: p.width,
+          height: p.height,
+          rotation: p.rotation ?? 0,
+          fill: paint(p.fill, p.fillOpacity),
+          ...strokeProps(p),
+          cornerRadius: p.radius,
+          overflow: LEAFER_OVERFLOW[p.overflow ?? 'visible'],
+          opacity
+        }
+      };
   }
 }
 
-/**
- * 就地更新已有 Leafer 图元属性 (In-place Mutation)
- */
-export function updateLeaferShapeInPlace(shape: LeaferShape, primitive: CanvasPrimitive, dpr = 1): boolean {
-  switch (primitive.kind) {
-    case 'rect':
-      if (!(shape instanceof Rect)) return false;
-      updateRectShape(shape, primitive, dpr);
-      return true;
-
-    case 'text':
-      if (!(shape instanceof Text)) return false;
-      updateTextShape(shape, primitive);
-      return true;
-
-    case 'circle':
-      if (!(shape instanceof Ellipse)) return false;
-      updateCircleShape(shape, primitive, dpr);
-      return true;
-
-    case 'ellipse':
-      if (!(shape instanceof Ellipse)) return false;
-      updateEllipseShape(shape, primitive, dpr);
-      return true;
-
-    case 'polygon':
-      if (!(shape instanceof Polygon)) return false;
-      updatePolygonShape(shape, primitive, dpr);
-      return true;
-
-    case 'path':
-      if (!(shape instanceof Path)) return false;
-      updatePathShape(shape, primitive, dpr);
-      return true;
-
-    case 'line':
-      if (!(shape instanceof Line)) return false;
-      updateLineShape(shape, primitive, dpr);
-      return true;
-
-    case 'image':
-      if (!(shape instanceof Image)) return false;
-      updateImageShape(shape, primitive, dpr);
-      return true;
-
-    case 'group':
-      if (!(shape instanceof Group)) return false;
-      updateGroupShape(shape, primitive, dpr);
-      return true;
-
-    case 'box':
-      if (!(shape instanceof Box)) return false;
-      updateBoxShape(shape, primitive, dpr);
-      return true;
-
-    default:
-      return false;
+/** 由图元新建 Leafer 图元 (含子图元) */
+export function createLeaferShape(primitive: CanvasPrimitive): LeaferShape {
+  const { Shape, props } = describe(primitive);
+  const shape = new Shape(props);
+  if (primitive.kind === 'group' || primitive.kind === 'box') {
+    for (const child of primitive.children) (shape as Group).add(createLeaferShape(child));
   }
+  return shape;
 }
 
 /**
- * 批量同步图元列表：就地复用已有图元，多退少补
+ * 就地更新已有图元；类型不一致时返回 false，由调用方替换
+ */
+export function updateLeaferShape(shape: LeaferShape, primitive: CanvasPrimitive): boolean {
+  const { Shape, props } = describe(primitive);
+  if (shape.constructor !== Shape) return false;
+  shape.set(props);
+  if (primitive.kind === 'group' || primitive.kind === 'box') {
+    const group = shape as Group;
+    reconcileLeaferShapes(group, group.children as LeaferShape[], primitive.children);
+  }
+  return true;
+}
+
+/**
+ * 按位置对齐图元列表：同位置同类型就地更新，否则替换；多余的移除，不足的补齐
+ * @returns 对齐后的图元列表 (与 primitives 一一对应)
  */
 export function reconcileLeaferShapes(
-  parentGroup: Group,
-  existingShapes: LeaferShape[],
-  primitives: CanvasPrimitive[],
-  dpr = 1
+  parent: Group,
+  existing: readonly LeaferShape[],
+  primitives: readonly CanvasPrimitive[]
 ): LeaferShape[] {
-  const resultShapes: LeaferShape[] = [];
-  const maxLen = Math.max(existingShapes.length, primitives.length);
-
-  for (let i = 0; i < maxLen; i++) {
-    const existing = existingShapes[i];
-    const target = primitives[i];
-
-    if (existing && target) {
-      if (updateLeaferShapeInPlace(existing, target, dpr)) {
-        resultShapes.push(existing);
-      } else {
-        existing.remove();
-        const newShape = createLeaferShapeFromPrimitive(target, dpr);
-        parentGroup.addAt(newShape, i);
-        resultShapes.push(newShape);
-      }
-    } else if (!existing && target) {
-      const newShape = createLeaferShapeFromPrimitive(target, dpr);
-      parentGroup.addAt(newShape, i);
-      resultShapes.push(newShape);
-    } else if (existing && !target) {
-      existing.remove();
+  const result: LeaferShape[] = [];
+  for (let i = 0; i < primitives.length; i++) {
+    const shape = existing[i];
+    if (shape && updateLeaferShape(shape, primitives[i])) {
+      result.push(shape);
+      continue;
     }
+    shape?.remove();
+    const created = createLeaferShape(primitives[i]);
+    parent.addAt(created, i);
+    result.push(created);
   }
-
-  return resultShapes;
-}
-
-// ================= 具体图元实现纯逻辑 =================
-
-function createRectShape(p: RectPrimitive, _dpr: number): Rect {
-  return new Rect({
-    x: p.x,
-    y: p.y,
-    width: Math.max(0, p.width),
-    height: Math.max(0, p.height),
-    fill: p.fill,
-    opacity: p.opacity,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    cornerRadius: p.radius,
-    strokeAlign: p.strokeAlign
-  });
-}
-
-function updateRectShape(shape: Rect, p: RectPrimitive, _dpr: number): void {
-  shape.set({
-    x: p.x,
-    y: p.y,
-    width: Math.max(0, p.width),
-    height: Math.max(0, p.height),
-    fill: p.fill,
-    opacity: p.opacity ?? 1,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    cornerRadius: p.radius,
-    strokeAlign: p.strokeAlign
-  });
-}
-
-function createTextShape(p: TextPrimitive): Text {
-  return new Text({
-    x: p.x,
-    y: p.y,
-    text: p.text,
-    width: p.width,
-    height: p.height,
-    fontSize: p.fontSize ?? 14,
-    fontFamily: p.fontFamily,
-    fontWeight: toLeaferFontWeight(p.fontWeight),
-    italic: p.fontStyle === 'italic',
-    fill: p.fill,
-    textAlign: p.textAlign,
-    verticalAlign: p.verticalAlign,
-    textBaseline: p.textBaseline,
-    lineHeight: toLeaferLineHeight(p.lineHeight),
-    letterSpacing: p.letterSpacing,
-    textWrap: toLeaferTextWrap(p.textWrap),
-    textDecoration: toLeaferTextDecoration(p.textDecoration),
-    textOverflow: toLeaferTextOverflow(p.textOverflow),
-    opacity: p.opacity
-  });
-}
-
-function updateTextShape(shape: Text, p: TextPrimitive): void {
-  shape.set({
-    x: p.x,
-    y: p.y,
-    text: p.text,
-    width: p.width,
-    height: p.height,
-    fontSize: p.fontSize ?? 14,
-    fontFamily: p.fontFamily,
-    fontWeight: toLeaferFontWeight(p.fontWeight),
-    italic: p.fontStyle === 'italic',
-    fill: p.fill,
-    textAlign: p.textAlign,
-    verticalAlign: p.verticalAlign,
-    textBaseline: p.textBaseline,
-    lineHeight: toLeaferLineHeight(p.lineHeight),
-    letterSpacing: p.letterSpacing,
-    textWrap: toLeaferTextWrap(p.textWrap),
-    textDecoration: toLeaferTextDecoration(p.textDecoration),
-    textOverflow: toLeaferTextOverflow(p.textOverflow),
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createCircleShape(p: CirclePrimitive, _dpr: number): Ellipse {
-  const d = p.r * 2;
-  return new Ellipse({
-    x: p.cx - p.r,
-    y: p.cy - p.r,
-    width: d,
-    height: d,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    opacity: p.opacity
-  });
-}
-
-function updateCircleShape(shape: Ellipse, p: CirclePrimitive, _dpr: number): void {
-  const d = p.r * 2;
-  shape.set({
-    x: p.cx - p.r,
-    y: p.cy - p.r,
-    width: d,
-    height: d,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createEllipseShape(p: EllipsePrimitive, _dpr: number): Ellipse {
-  return new Ellipse({
-    x: p.cx - p.rx,
-    y: p.cy - p.ry,
-    width: p.rx * 2,
-    height: p.ry * 2,
-    rotation: p.rotation ?? 0,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    opacity: p.opacity
-  });
-}
-
-function updateEllipseShape(shape: Ellipse, p: EllipsePrimitive, _dpr: number): void {
-  shape.set({
-    x: p.cx - p.rx,
-    y: p.cy - p.ry,
-    width: p.rx * 2,
-    height: p.ry * 2,
-    rotation: p.rotation ?? 0,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createPolygonShape(p: PolygonPrimitive, _dpr: number): Polygon {
-  return new Polygon({
-    points: p.points,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    cornerRadius: p.cornerRadius,
-    opacity: p.opacity
-  });
-}
-
-function updatePolygonShape(shape: Polygon, p: PolygonPrimitive, _dpr: number): void {
-  shape.set({
-    points: p.points,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeDashArray: p.strokeDashArray,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    cornerRadius: p.cornerRadius,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createPathShape(p: PathPrimitive, _dpr: number): Path {
-  return new Path({
-    d: p.d,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    opacity: p.opacity
-  });
-}
-
-function updatePathShape(shape: Path, p: PathPrimitive, _dpr: number): void {
-  shape.set({
-    d: p.d,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createLineShape(p: LinePrimitive, _dpr: number): Line {
-  return new Line({
-    points: p.points,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth ?? 1,
-    strokeDashArray: p.strokeDashArray,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    cornerRadius: p.cornerRadius,
-    opacity: p.opacity
-  });
-}
-
-function updateLineShape(shape: Line, p: LinePrimitive, _dpr: number): void {
-  shape.set({
-    points: p.points,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth ?? 1,
-    strokeDashArray: p.strokeDashArray,
-    strokeCap: toLeaferStrokeCap(p.strokeCap),
-    strokeJoin: p.strokeJoin,
-    cornerRadius: p.cornerRadius,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createImageShape(p: ImagePrimitive, _dpr: number): Image {
-  return new Image({
-    url: p.url,
-    x: p.x,
-    y: p.y,
-    width: p.width,
-    height: p.height,
-    cornerRadius: p.radius,
-    opacity: p.opacity
-  });
-}
-
-function updateImageShape(shape: Image, p: ImagePrimitive, _dpr: number): void {
-  shape.set({
-    url: p.url,
-    x: p.x,
-    y: p.y,
-    width: p.width,
-    height: p.height,
-    cornerRadius: p.radius,
-    opacity: p.opacity ?? 1
-  });
-}
-
-function createGroupShape(p: GroupPrimitive, dpr: number): Group {
-  const group = new Group({
-    x: p.x,
-    y: p.y,
-    opacity: p.opacity
-  });
-  if (p.children && p.children.length > 0) {
-    p.children.forEach((child) => {
-      group.add(createLeaferShapeFromPrimitive(child, dpr));
-    });
-  }
-  return group;
-}
-
-function updateGroupShape(shape: Group, p: GroupPrimitive, dpr: number): void {
-  shape.set({
-    x: p.x,
-    y: p.y,
-    opacity: p.opacity ?? 1
-  });
-  if (p.children && p.children.length > 0) {
-    reconcileLeaferShapes(shape, shape.children as LeaferShape[], p.children, dpr);
-  } else if (shape.children && shape.children.length > 0) {
-    shape.clear();
-  }
-}
-
-function createBoxShape(p: BoxPrimitive, dpr: number): Box {
-  const box = new Box({
-    x: p.x,
-    y: p.y,
-    width: p.width,
-    height: p.height,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    cornerRadius: p.radius,
-    opacity: p.opacity
-  });
-  if (p.children && p.children.length > 0) {
-    p.children.forEach((child) => {
-      box.add(createLeaferShapeFromPrimitive(child, dpr));
-    });
-  }
-  return box;
-}
-
-function updateBoxShape(shape: Box, p: BoxPrimitive, dpr: number): void {
-  shape.set({
-    x: p.x,
-    y: p.y,
-    width: p.width,
-    height: p.height,
-    fill: p.fill,
-    stroke: p.stroke,
-    strokeWidth: p.strokeWidth,
-    cornerRadius: p.radius,
-    opacity: p.opacity ?? 1
-  });
-  if (p.children && p.children.length > 0) {
-    reconcileLeaferShapes(shape, shape.children as LeaferShape[], p.children, dpr);
-  } else if (shape.children && shape.children.length > 0) {
-    shape.clear();
-  }
+  for (let i = primitives.length; i < existing.length; i++) existing[i].remove();
+  return result;
 }

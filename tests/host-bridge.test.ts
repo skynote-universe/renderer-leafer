@@ -1,6 +1,6 @@
 import './setup';
-import { describe, it, expect } from 'vitest';
-import { SkyNoteEngine } from '@skynote/core';
+import { describe, it, expect, vi } from 'vitest';
+import { DETACHED_CANVAS_HOST, SkyNoteEngine } from '@skynote/core';
 import type { CanvasPointerEvent, NodeEntity } from '@skynote/core';
 import { DOMHostBridge } from '../src/bridge/host-bridge';
 
@@ -51,7 +51,8 @@ describe('DOMHostBridge 高频指针事件', () => {
     const bridge = new DOMHostBridge({
       container: container as unknown as HTMLElement,
       engine,
-      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+      overlay: DETACHED_CANVAS_HOST.overlay,
+      onInteractionChange: () => {},
       requestFrame: () => {}
     });
 
@@ -79,12 +80,13 @@ describe('DOMHostBridge 高频指针事件', () => {
     const bridge = new DOMHostBridge({
       container: container as unknown as HTMLElement,
       engine,
-      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
-      requestFrame: () => {},
-      hitTest: () => {
-        hitCalls++;
-        return node;
-      }
+      overlay: DETACHED_CANVAS_HOST.overlay,
+      onInteractionChange: () => {},
+      requestFrame: () => {}
+    });
+    vi.spyOn(engine, 'hitTestNode').mockImplementation(() => {
+      hitCalls++;
+      return node;
     });
 
     engine.pointer.register('ignores-target', { onPointerMove: () => {} });
@@ -111,7 +113,8 @@ describe('DOMHostBridge 高频指针事件', () => {
     const bridge = new DOMHostBridge({
       container: container as unknown as HTMLElement,
       engine,
-      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+      overlay: DETACHED_CANVAS_HOST.overlay,
+      onInteractionChange: () => {},
       requestFrame: () => {}
     });
     expect(container.tabIndex).toBe(0);
@@ -151,7 +154,8 @@ describe('DOMHostBridge 按帧合并输入', () => {
     const bridge = new DOMHostBridge({
       container: container as unknown as HTMLElement,
       engine,
-      getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+      overlay: DETACHED_CANVAS_HOST.overlay,
+      onInteractionChange: () => {},
       requestFrame: () => frameRequests++
     });
     return { engine, container, bridge, frames: () => frameRequests };

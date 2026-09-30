@@ -23,11 +23,10 @@ function makeNode(id: string, x: number, extra?: Partial<NodeEntity>): NodeEntit
 }
 
 function mountRenderer(engine: SkyNoteEngine, options?: LeaferRendererOptions): LeaferRenderer {
-  const renderer = new LeaferRenderer(engine, options);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
-  renderer.mount(container);
+  const renderer = new LeaferRenderer(engine, container, options);
   return renderer;
 }
 
@@ -53,18 +52,18 @@ describe('LeaferRenderer 增量渲染', () => {
     engine.documentStore.addNode(makeNode('near', 0));
     engine.documentStore.addNode(makeNode('far', 10000));
     const renderer = mountRenderer(engine);
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
 
     expect(contentLayer.children.length).toBe(1);
     const nearGroup = contentLayer.children[0];
 
-    renderer.setViewport({ x: -9800 });
+    engine.session.setViewport({ x: -9800 });
     renderer.renderFrame();
     expect(contentLayer.children.length).toBe(1);
     expect(contentLayer.children[0]).not.toBe(nearGroup);
 
     // 回到原位时复用缓存的图元，而不是重新创建
-    renderer.setViewport({ x: 0 });
+    engine.session.setViewport({ x: 0 });
     renderer.renderFrame();
     expect(contentLayer.children).toEqual([nearGroup]);
     renderer.destroy();
@@ -74,7 +73,7 @@ describe('LeaferRenderer 增量渲染', () => {
     const engine = new SkyNoteEngine();
     engine.documentStore.addNode(makeNode('a', 0));
     const renderer = mountRenderer(engine);
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
     const originalGroup = contentLayer.children[0];
 
     engine.documentStore.removeNodes(['a']);
@@ -94,10 +93,10 @@ describe('LeaferRenderer 增量渲染', () => {
     engine.documentStore.addNode(makeNode('bottom', 0, { zIndex: 'a1' }));
     const renderer = mountRenderer(engine);
 
-    expect(renderer.hitTest({ x: 10, y: 10 })?.id).toBe('top');
+    expect(engine.hitTestNode({ x: 10, y: 10 })?.id).toBe('top');
 
     engine.documentStore.updateNode('bottom', { zIndex: 'a9' });
-    expect(renderer.hitTest({ x: 10, y: 10 })?.id).toBe('bottom');
+    expect(engine.hitTestNode({ x: 10, y: 10 })?.id).toBe('bottom');
     renderer.destroy();
   });
 
@@ -117,11 +116,11 @@ describe('LeaferRenderer 增量渲染', () => {
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
     const renderer = mountRenderer(engine);
 
-    expect(renderer.hitTestConnector({ x: 175, y: 25 })?.id).toBe('c1');
-    expect(renderer.hitTestConnector({ x: 175, y: 400 })).toBeUndefined();
+    expect(engine.hitTestConnector({ x: 175, y: 25 })?.id).toBe('c1');
+    expect(engine.hitTestConnector({ x: 175, y: 400 })).toBeUndefined();
 
-    const contentLayer = renderer.getContentLayer()!;
-    renderer.setViewport({ y: -5000 });
+    const contentLayer = renderer.contentLayer;
+    engine.session.setViewport({ y: -5000 });
     renderer.renderFrame();
     expect(contentLayer.children.length).toBe(0);
     renderer.destroy();
@@ -142,9 +141,9 @@ describe('LeaferRenderer 增量渲染', () => {
       destroy: (_shapes, node) => destroyed.push(node.id)
     });
     const cacheSize = () => (renderer as unknown as { nodeLayer: { cacheCount: number } }).nodeLayer.cacheCount;
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
     const panTo = (index: number) => {
-      renderer.setViewport({ x: -index * 2000 });
+      engine.session.setViewport({ x: -index * 2000 });
       renderer.renderFrame();
     };
 
@@ -185,7 +184,7 @@ describe('LeaferRenderer 增量渲染', () => {
     };
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
     const renderer = mountRenderer(engine);
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
     const linePoints = (): number[] => {
       for (const child of contentLayer.children) {
         const line = (child as unknown as { children?: unknown[] }).children?.find((shape) => shape instanceof Line);
@@ -208,7 +207,7 @@ describe('LeaferRenderer 增量渲染', () => {
     expect(linePoints()).toHaveLength(8);
 
     // 视口只覆盖绕行的水平段 (y≈5000)，两端节点均在视口外
-    renderer.setViewport({ x: 0, y: -4800 });
+    engine.session.setViewport({ x: 0, y: -4800 });
     renderer.renderFrame();
     expect(contentLayer.children).toHaveLength(1);
     renderer.destroy();

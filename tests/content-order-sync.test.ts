@@ -38,7 +38,7 @@ function paintOrder(renderer: LeaferRenderer): string[] {
       if (childrenContainer) walk(childrenContainer);
     }
   };
-  walk(renderer.getContentLayer()!);
+  walk(renderer.contentLayer);
   return result;
 }
 
@@ -47,7 +47,7 @@ function expectContainersMatch(engine: SkyNoteEngine, renderer: LeaferRenderer, 
   const { nodeLayer, connectorLayer } = internalsOf(renderer);
   const getNode = (id: string) => engine.entityStore.getNode(id)?.entity;
   const containerOf = (containerId: string | undefined): Group =>
-    containerId === undefined ? renderer.getContentLayer()! : nodeLayer.getChildrenContainer(containerId)!;
+    containerId === undefined ? renderer.contentLayer : nodeLayer.getChildrenContainer(containerId)!;
 
   const expected = new Map<Group, ContentLayerOrderEntry<Group>[]>();
   const push = (container: Group, entry: ContentLayerOrderEntry<Group>) => {
@@ -87,7 +87,7 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
     const pickFrom = (ids: string[]) => ids[Math.floor(random() * ids.length)];
     const addRandomNode = () => {
       const id = `n${seq++}`;
-      const candidates = Object.keys(engine.getView().content.nodes);
+      const candidates = Object.keys(engine.documentStore.getView().content.nodes);
       const parentId = random() < 0.3 && candidates.length > 0 ? pickFrom(candidates) : undefined;
       const node: NodeEntity = {
         id,
@@ -106,7 +106,7 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
       store.addNode(node);
     };
     const addRandomConnector = () => {
-      const ids = Object.keys(engine.getView().content.nodes);
+      const ids = Object.keys(engine.documentStore.getView().content.nodes);
       if (ids.length < 2) return;
       const id = `c${seq++}`;
       store.commit({
@@ -130,18 +130,17 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
     for (let i = 0; i < 120; i++) addRandomNode();
     for (let i = 0; i < 40; i++) addRandomConnector();
 
-    const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 1000 });
     Object.defineProperty(container, 'clientHeight', { value: 800 });
-    renderer.mount(container);
+    const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
     const getNode = (id: string) => engine.entityStore.getNode(id)?.entity;
 
     for (let step = 0; step < 250; step++) {
-      const ids = Object.keys(engine.getView().content.nodes);
+      const ids = Object.keys(engine.documentStore.getView().content.nodes);
       const roll = random();
       if (roll < 0.3) {
-        renderer.setViewport({ x: -Math.floor(random() * 2200), y: -Math.floor(random() * 1300) });
+        engine.session.setViewport({ x: -Math.floor(random() * 2200), y: -Math.floor(random() * 1300) });
       } else if (roll < 0.5) {
         const moves = ['forward', 'backward', 'front', 'back'] as const;
         store.moveLayers([pickFrom(ids), pickFrom(ids)], moves[Math.floor(random() * 4)]);

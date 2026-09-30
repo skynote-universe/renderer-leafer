@@ -9,17 +9,16 @@ function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = new LeaferRenderer(engine);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
-  renderer.mount(container);
+  const renderer = new LeaferRenderer(engine, container);
   return renderer;
 }
 
 /** 读取内容层中第 index 个节点的首个图元 */
 function firstShapeOf(renderer: LeaferRenderer, index: number): Record<string, unknown> {
-  const outerGroup = renderer.getContentLayer()!.children[index] as unknown as {
+  const outerGroup = renderer.contentLayer.children[index] as unknown as {
     children: { children: Record<string, unknown>[] }[];
   };
   return outerGroup.children[0].children[0];
@@ -42,7 +41,7 @@ describe('LeaferRenderer 主题驱动配色', () => {
 
     expect(firstShapeOf(renderer, 0).fill).toBe(dark.nodeFill);
     expect(firstShapeOf(renderer, 1).fill).toBe('#FF0000');
-    const leafer = renderer.getContentLayer()!.parent!.parent as unknown as { fill: string };
+    const leafer = renderer.contentLayer.parent!.parent as unknown as { fill: string };
     expect(leafer.fill).toBe(dark.background);
     renderer.destroy();
   });
@@ -84,9 +83,9 @@ describe('LeaferRenderer 主题驱动配色', () => {
     engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
 
     const renderer = mountRenderer(engine);
-    const connectorGroup = renderer
-      .getContentLayer()!
-      .children.find((child) => (child as unknown as { children: unknown[] }).children.length === 2) as unknown as {
+    const connectorGroup = renderer.contentLayer.children.find(
+      (child) => (child as unknown as { children: unknown[] }).children.length === 2
+    ) as unknown as {
       children: Record<string, unknown>[];
     };
     const [line, marker] = connectorGroup.children;

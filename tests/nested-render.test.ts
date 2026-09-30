@@ -36,11 +36,10 @@ function makeConnector(id: string, from: string, to: string): ConnectorEntity {
 }
 
 function mount(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
-  renderer.mount(container);
+  const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
   return renderer;
 }
 
@@ -50,14 +49,14 @@ function layers(renderer: LeaferRenderer) {
 
 /** 图元相对内容层 (即世界坐标，视口变换在内容层之上) 的包围盒 */
 function sceneBounds(renderer: LeaferRenderer, group: Group) {
-  return group.getBounds('box', renderer.getContentLayer()!);
+  return group.getBounds('box', renderer.contentLayer);
 }
 
 function expectBoundsClose(actual: { x: number; y: number; width: number; height: number }, expected: RectBounds) {
   expect(actual.x).toBeCloseTo(expected.left, 4);
   expect(actual.y).toBeCloseTo(expected.top, 4);
-  expect(actual.width).toBeCloseTo(expected.width, 4);
-  expect(actual.height).toBeCloseTo(expected.height, 4);
+  expect(actual.width).toBeCloseTo(expected.right - expected.left, 4);
+  expect(actual.height).toBeCloseTo(expected.bottom - expected.top, 4);
 }
 
 describe('嵌套渲染 (ADR-114)', () => {
@@ -71,7 +70,7 @@ describe('嵌套渲染 (ADR-114)', () => {
 
     const cardGroup = nodeLayer.getGroup('card')!;
     expect(cardGroup.parent).toBe(nodeLayer.getChildrenContainer('frame'));
-    expect(renderer.getContentLayer()!.children).toEqual([nodeLayer.getGroup('frame')]);
+    expect(renderer.contentLayer.children).toEqual([nodeLayer.getGroup('frame')]);
     expectBoundsClose(sceneBounds(renderer, cardGroup), engine.getNodeWorldBounds('card')!);
 
     // 移动容器：只有容器图元变化，子节点随之移动且与内核一致
@@ -109,9 +108,9 @@ describe('嵌套渲染 (ADR-114)', () => {
     expect(childrenContainer).toBeInstanceOf(Box);
     expect((childrenContainer as Box).overflow).toBe('hide');
 
-    expect(renderer.hitTest({ x: 180, y: 70 })?.id).toBe('card');
+    expect(engine.hitTestNode({ x: 180, y: 70 })?.id).toBe('card');
     // 卡片超出画框的部分 (x > 200) 被裁剪，落在其上只可能命中空白
-    expect(renderer.hitTest({ x: 230, y: 70 })).toBeUndefined();
+    expect(engine.hitTestNode({ x: 230, y: 70 })).toBeUndefined();
     renderer.destroy();
   });
 
@@ -127,7 +126,7 @@ describe('嵌套渲染 (ADR-114)', () => {
     }
     const renderer = mount(engine);
     const { nodeLayer, connectorLayer } = layers(renderer);
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
 
     const inner = connectorLayer.getGroup('inner')!;
     const frameChildren = nodeLayer.getChildrenContainer('frame')!;
@@ -167,7 +166,7 @@ describe('嵌套渲染 (ADR-114)', () => {
 
     store.reparentNodes(['card'], undefined);
     renderer.renderFrame();
-    expect(cardGroup.parent).toBe(renderer.getContentLayer());
+    expect(cardGroup.parent).toBe(renderer.contentLayer);
     expectBoundsClose(sceneBounds(renderer, cardGroup), before);
     renderer.destroy();
   });

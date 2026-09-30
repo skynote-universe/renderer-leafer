@@ -110,3 +110,6 @@ if (typeof (globalThis as any).requestAnimationFrame === 'undefined') {
 if (typeof (globalThis as any).cancelAnimationFrame === 'undefined') {
   (globalThis as any).cancelAnimationFrame = (id: any) => clearTimeout(id);
 }
+if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
+  (globalThis as any).devicePixelRatio = 1;
+}

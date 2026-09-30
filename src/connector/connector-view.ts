@@ -17,11 +17,11 @@ import type {
   ComputedRoute,
   ConnectorEntity,
   Matrix2D,
-  Point,
-  StrokeCap
+  Point
 } from '@skynote/core';
 import { invertMatrix, resolveThemeColor } from '@skynote/core';
 import { Group, Line, Path } from 'leafer';
+import { toLeaferStrokeCap } from '../primitives/primitive-mapper';
 
 export interface ConnectorViewInput {
   connector: ConnectorEntity;
@@ -40,12 +40,6 @@ interface StrokePaint {
   width: number;
   background: string;
 }
-
-const LEAFER_STROKE_CAP: Record<StrokeCap, 'round' | 'square' | 'none'> = {
-  round: 'round',
-  square: 'square',
-  butt: 'none'
-};
 
 function resolveMarkerFill(rule: ArrowMarkerFillRule | undefined, paint: StrokePaint): string | undefined {
   if (rule === 'none') return undefined;
@@ -104,7 +98,7 @@ export class ConnectorView {
       stroke: paint.color,
       strokeWidth: paint.width,
       strokeDashArray: style?.strokeDashArray,
-      strokeCap: style?.strokeCap && LEAFER_STROKE_CAP[style.strokeCap],
+      strokeCap: toLeaferStrokeCap(style?.strokeCap),
       strokeJoin: style?.strokeJoin,
       cornerRadius: style?.cornerRadius
     });
@@ -163,7 +157,8 @@ export class ConnectorView {
       x: tip.x,
       y: tip.y,
       rotation: (Math.atan2(dy, dx) * 180) / Math.PI,
-      d: marker.d,
+      // Leafer 的路径属性名为 path (没有 d)
+      path: marker.d,
       fill: resolveMarkerFill(marker.fillRule, paint),
       stroke: paint.color,
       strokeWidth: paint.width

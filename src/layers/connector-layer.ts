@@ -66,7 +66,7 @@ export class ConnectorLayer {
   }
 
   /**
-   * 绘制本帧视锥内连线 (路由、数据版本、主题与容器矩阵未变时走 Fast Path 零开销)
+   * 绘制本帧视锥内连线 (路由、数据版本、主题与容器矩阵未变时直接跳过)
    * 只对新进入场景的连线计时，用于校准分帧调度器
    * @param resolveContainer 挂载容器节点 id → 其子容器图元 (节点图层已在本帧挂载)；undefined 为根内容层
    */

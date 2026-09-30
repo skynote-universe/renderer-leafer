@@ -4,7 +4,7 @@
  *
  * 设计考量 (Why):
  * 1. 测量与绘制走同一条路径：文本块经 core 的 createTextBlockPrimitive 转为图元，再由与渲染完全相同的
- *    createLeaferShapeFromPrimitive 生成 Leafer Text，读取其排版包围盒。字体、折行与行高规则与实际绘制一致，
+ *    createLeaferShape 生成 Leafer Text，读取其排版包围盒。字体、折行与行高规则与实际绘制一致，
  *    自动尺寸不会出现「量出来一个高度、画出来另一个高度」的偏差。
  * 2. 复用同一个 Text 实例逐次就地更新属性，测量大量节点时不产生额外 GC 压力。
  *
@@ -14,7 +14,7 @@
 import type { Text } from 'leafer';
 import type { TextMeasurer, TextMeasureRequest, TextBlockMetrics } from '@skynote/core';
 import { createTextBlockPrimitive } from '@skynote/core';
-import { createLeaferShapeFromPrimitive, updateLeaferShapeInPlace } from '../primitives/primitive-mapper';
+import { createLeaferShape, updateLeaferShape } from '../primitives/primitive-mapper';
 
 export class LeaferTextMeasurer implements TextMeasurer {
   private probe: Text | null = null;
@@ -26,9 +26,9 @@ export class LeaferTextMeasurer implements TextMeasurer {
       width: request.maxWidth
     });
     if (this.probe) {
-      updateLeaferShapeInPlace(this.probe, primitive);
+      updateLeaferShape(this.probe, primitive);
     } else {
-      this.probe = createLeaferShapeFromPrimitive(primitive) as Text;
+      this.probe = createLeaferShape(primitive) as Text;
     }
     const bounds = this.probe.getBounds('box', 'inner');
     return { width: bounds.width, height: bounds.height };

@@ -11,11 +11,10 @@ function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
 }
 
 function mountRenderer(engine: SkyNoteEngine): LeaferRenderer {
-  const renderer = new LeaferRenderer(engine);
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
-  renderer.mount(container);
+  const renderer = new LeaferRenderer(engine, container);
   return renderer;
 }
 
@@ -24,12 +23,12 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     const engine = new SkyNoteEngine();
     const renderer = mountRenderer(engine);
 
-    renderer.setViewport({ x: 120, zoom: 2 });
+    engine.session.setViewport({ x: 120, zoom: 2 });
     expect(engine.session.viewport).toEqual({ x: 120, y: 0, zoom: 2 });
 
     engine.session.setViewport({ y: -40 });
-    expect(renderer.getViewport()).toEqual({ x: 120, y: -40, zoom: 2 });
-    const sceneGroup = renderer.getContentLayer()!.parent!;
+    expect(engine.session.viewport).toEqual({ x: 120, y: -40, zoom: 2 });
+    const sceneGroup = renderer.contentLayer.parent!;
     expect(sceneGroup.y).toBe(-40);
     expect(sceneGroup.scaleX).toBe(2);
     renderer.destroy();
@@ -112,29 +111,29 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     engine.documentStore.updateNode('a', { locked: true });
 
     const renderer = mountRenderer(engine);
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
     expect(contentLayer.children.length).toBe(3);
 
     composeSpy.mockClear();
-    renderer.setViewport({ zoom: 0.2 });
+    engine.session.setViewport({ zoom: 0.2 });
     renderer.renderFrame();
-    expect(renderer.getLodLevel()).toBe('reduced');
+    expect(renderer.lodLevel).toBe('reduced');
     engine.documentStore.updateNode('a', { locked: false });
     renderer.renderFrame();
     // 占位档位跳过 compose
     expect(composeSpy).not.toHaveBeenCalled();
     expect(contentLayer.children.length).toBe(3);
 
-    renderer.setViewport({ zoom: 0.05 });
+    engine.session.setViewport({ zoom: 0.05 });
     renderer.renderFrame();
-    expect(renderer.getLodLevel()).toBe('minimal');
+    expect(renderer.lodLevel).toBe('minimal');
     expect(contentLayer.children.length).toBe(2);
 
     // 放大后经过回升迟滞自动补帧恢复完整内容，无需额外交互
-    renderer.setViewport({ zoom: 1 });
+    engine.session.setViewport({ zoom: 1 });
     renderer.renderFrame();
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(renderer.getLodLevel()).toBe('full');
+    expect(renderer.lodLevel).toBe('full');
     expect(composeSpy).toHaveBeenCalled();
     expect(contentLayer.children.length).toBe(3);
     renderer.destroy();
@@ -153,7 +152,7 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     } as never);
 
     const renderer = mountRenderer(engine);
-    expect(renderer.getContentLayer()!.children.length).toBe(2);
+    expect(renderer.contentLayer.children.length).toBe(2);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
     engine.documentStore.moveNodes(['good'], { x: 1 });

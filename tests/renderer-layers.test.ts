@@ -1,30 +1,21 @@
 import './setup';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { SkyNoteEngine } from '@skynote/core';
+import { DETACHED_CANVAS_HOST, SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';
 
 describe('LeaferRenderer 场景树图层架构', () => {
-  it('mount 后正确定位 backgroundLayer 处于最底层，且独立于 contentLayer', () => {
+  it('backgroundLayer 处于最底层，且独立于 contentLayer', () => {
     const engine = new SkyNoteEngine();
-    const renderer = new LeaferRenderer(engine);
 
-    // 尚未 mount 时图层为 null
-    expect(renderer.getBackgroundLayer()).toBeNull();
-    expect(renderer.getContentLayer()).toBeNull();
-
-    // 模拟 mount 挂载
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 1000 });
     Object.defineProperty(container, 'clientHeight', { value: 800 });
 
-    renderer.mount(container);
+    const renderer = new LeaferRenderer(engine, container);
 
-    const backgroundLayer = renderer.getBackgroundLayer();
-    const contentLayer = renderer.getContentLayer();
-
-    expect(backgroundLayer).not.toBeNull();
-    expect(contentLayer).not.toBeNull();
+    const backgroundLayer = renderer.backgroundLayer;
+    const contentLayer = renderer.contentLayer;
 
     // 验证场景树相对层级：backgroundLayer 必须在 contentLayer 之前添加 (最底)
     const sceneGroup = (backgroundLayer as any).parent;
@@ -32,10 +23,7 @@ describe('LeaferRenderer 场景树图层架构', () => {
     expect(sceneGroup.children[0]).toBe(backgroundLayer);
     expect(sceneGroup.children[1]).toBe(contentLayer);
 
-    // 验证 destroy 资源完全释放
     renderer.destroy();
-    expect(renderer.getBackgroundLayer()).toBeNull();
-    expect(renderer.getContentLayer()).toBeNull();
   });
 
   it('通过 DocumentStore 修改 zIndex 后内容层自动重排', () => {
@@ -55,13 +43,12 @@ describe('LeaferRenderer 场景树图层架构', () => {
     engine.documentStore.addNode(make('a', 'a1'));
     engine.documentStore.addNode(make('b', 'a2'));
 
-    const renderer = new LeaferRenderer(engine);
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 1000 });
     Object.defineProperty(container, 'clientHeight', { value: 800 });
-    renderer.mount(container);
+    const renderer = new LeaferRenderer(engine, container);
 
-    const contentLayer = renderer.getContentLayer()!;
+    const contentLayer = renderer.contentLayer;
     const [groupA, groupB] = contentLayer.children;
     expect(contentLayer.children).toEqual([groupA, groupB]);
 
@@ -75,13 +62,12 @@ describe('LeaferRenderer 场景树图层架构', () => {
 
   it('Esc 经焦点栈以最低优先级清空瞬态图元 (持久图元保留)，销毁后注销作用域', () => {
     const engine = new SkyNoteEngine();
-    const renderer = new LeaferRenderer(engine);
     const container = document.createElement('div');
     Object.defineProperty(container, 'clientWidth', { value: 1000 });
     Object.defineProperty(container, 'clientHeight', { value: 800 });
-    renderer.mount(container);
+    const renderer = new LeaferRenderer(engine, container);
 
-    const ephemeralGroup = renderer.getContentLayer()!.parent!.children[2] as unknown as { children: unknown[] };
+    const ephemeralGroup = renderer.contentLayer.parent!.children[2] as unknown as { children: unknown[] };
     // 经引擎宿主写入 (与交互插件的路径一致)：框选为瞬态，选中框为持久
     engine.host.overlay.setPrimitives('marquee', [{ kind: 'rect', x: 0, y: 0, width: 10, height: 10 }], {
       transient: true
@@ -104,9 +90,9 @@ describe('LeaferRenderer 场景树图层架构', () => {
     expect(ephemeralGroup.children.length).toBe(1);
 
     renderer.destroy();
-    expect(engine.inputScopes.hasScope('renderer:ephemeral-escape')).toBe(false);
+    expect(engine.inputScopes.hasScope('renderer:overlay-escape')).toBe(false);
     // 卸载后引擎回到空宿主
-    expect(engine.host.bridge.getViewportRect()).toEqual({ width: 0, height: 0 });
+    expect(engine.host).toBe(DETACHED_CANVAS_HOST);
   });
 
   describe('视口尺寸', () => {
@@ -143,13 +129,12 @@ describe('LeaferRenderer 场景树图层架构', () => {
       engine.documentStore.addNode(makeNode('near', 10));
       engine.documentStore.addNode(makeNode('far', 1500));
 
-      const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
       const container = document.createElement('div');
       const widthRead = vi.fn(() => 400);
       Object.defineProperty(container, 'clientWidth', { get: widthRead });
       Object.defineProperty(container, 'clientHeight', { value: 300 });
-      renderer.mount(container);
-      const contentLayer = renderer.getContentLayer()!;
+      const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
+      const contentLayer = renderer.contentLayer;
       expect(contentLayer.children.length).toBe(1);
 
       widthRead.mockClear();

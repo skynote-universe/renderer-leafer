@@ -32,11 +32,10 @@ function createScene() {
   }
   engine.documentStore.commit({ patches, undoable: false });
 
-  const renderer = new LeaferRenderer(engine, { enableFrameScheduler: false });
   const container = document.createElement('div');
   Object.defineProperty(container, 'clientWidth', { value: 1000 });
   Object.defineProperty(container, 'clientHeight', { value: 800 });
-  renderer.mount(container);
+  const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
   engine.session.setViewport({ zoom: 0.8, x: 0, y: 0 });
   renderer.renderFrame();
   return { engine, renderer };
@@ -68,9 +67,7 @@ describe('渲染帧开销 (10k 节点，约 1700 个可见)', () => {
       left: 0,
       top: 0,
       right: 1250,
-      bottom: 1000,
-      width: 1250,
-      height: 1000
+      bottom: 1000
     });
     const frame = averageFrame((i) => {
       engine.session.setSelection({ nodeIds: i % 2 === 0 ? visibleIds : [] });

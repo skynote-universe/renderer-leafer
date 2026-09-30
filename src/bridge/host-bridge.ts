@@ -1,11 +1,11 @@
 /**
  * @file host-bridge.ts
- * @description 宿主网关与输入事件桥接实现 (DOMHostBridge)
+ * @description 浏览器宿主桥：DOM 输入 → 归一化画布事件，并向引擎提供宿主能力 (CanvasHost)
  *
  * 遵守 AGENTS.md 准则：
  * 1. 平台中立边界：此文件为面向浏览器 DOM 容器的专用桥接器，Core 不感知具体 DOM；
  * 2. 坐标归一化：DOM 原生事件解算为视口与世界逻辑坐标，挂载 claimPointer 独占裁判；
- * 3. 资源成对销毁：destroy() 彻底卸载所有事件监听，无任何残留。
+ * 3. 资源成对销毁：destroy() 卸载所有事件监听，无任何残留。
  * 4. 键盘经容器焦点进入 ADR-005 焦点栈：画布容器可聚焦、按下指针时获得焦点，只在画布持有焦点时响应快捷键；
  *    来自输入框与可编辑区域 (含 mountDOM 嵌入的编辑器) 的按键不转发，避免打字时误触删除等快捷键。
  * 5. 高频事件零强制布局：容器矩形缓存复用，仅在尺寸变化、页面滚动或新手势开始时刷新，
@@ -15,9 +15,15 @@
  *    按下、抬起、取消前先冲刷该指针待分发的移动，保证事件顺序。
  */
 
-import type { IHostBridge, SystemCursor, CanvasKeyboardEvent, SkyNoteEngine, Point, NodeEntity } from '@skynote/core';
-import { SyntheticPointerEvent, SyntheticWheelEvent } from '@skynote/core';
-import { screenToWorld, type ViewportState } from '../viewport/viewport-transform';
+import type {
+  CanvasHost,
+  CanvasKeyboardEvent,
+  OverlayChannel,
+  Point,
+  SkyNoteEngine,
+  SystemCursor
+} from '@skynote/core';
+import { SyntheticPointerEvent, SyntheticWheelEvent, screenToWorld } from '@skynote/core';
 
 /** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键) */
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -44,20 +50,20 @@ const WHEEL_LINE_HEIGHT = 16;
 export interface HostBridgeOptions {
   container: HTMLElement;
   engine: SkyNoteEngine;
+  /** 覆盖层 (由渲染器提供)，随宿主能力一并交给引擎 */
+  overlay: OverlayChannel;
   /** 申请下一帧：渲染器在帧开始时调用 flushPendingInput 冲刷合并后的输入 */
   requestFrame: () => void;
-  getViewport: () => ViewportState;
-  hitTest?: (point: Point) => NodeEntity | undefined;
-  onInteractionChange?: (isInteracting: boolean) => void;
+  /** 指针按下 / 抬起时通知 (渲染器据此调整 LOD) */
+  onInteractionChange: (isInteracting: boolean) => void;
 }
 
-export class DOMHostBridge implements IHostBridge {
+export class DOMHostBridge implements CanvasHost {
+  readonly overlay: OverlayChannel;
   private readonly container: HTMLElement;
   private readonly engine: SkyNoteEngine;
-  private readonly getViewport: () => ViewportState;
-  private readonly hitTest?: (point: Point) => NodeEntity | undefined;
-  private readonly onInteractionChange?: (isInteracting: boolean) => void;
   private readonly requestFrame: () => void;
+  private readonly onInteractionChange: (isInteracting: boolean) => void;
   private readonly abortController = new AbortController();
   private pendingMoves = new Map<number, PointerEvent>();
   /** 键为是否缩放手势：平移与缩放各自累加，同帧内先后发生时分别分发 */
@@ -66,19 +72,12 @@ export class DOMHostBridge implements IHostBridge {
   private resizeObserver: ResizeObserver | null = null;
 
   constructor(options: HostBridgeOptions) {
+    this.overlay = options.overlay;
     this.container = options.container;
     this.engine = options.engine;
-    this.getViewport = options.getViewport;
-    this.hitTest = options.hitTest;
-    this.onInteractionChange = options.onInteractionChange;
     this.requestFrame = options.requestFrame;
-
+    this.onInteractionChange = options.onInteractionChange;
     this.bindDomEvents();
-  }
-
-  getViewportRect(): { width: number; height: number } {
-    const rect = this.getContainerRect();
-    return { width: rect.width, height: rect.height };
   }
 
   setCursor(cursor: SystemCursor): void {
@@ -165,8 +164,7 @@ export class DOMHostBridge implements IHostBridge {
   private toCanvasPointerEvent(e: PointerEvent): SyntheticPointerEvent {
     const rect = this.getContainerRect();
     const clientPoint: Point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const point = screenToWorld(clientPoint, this.getViewport());
-    const { hitTest } = this;
+    const point = screenToWorld(clientPoint, this.engine.session.viewport);
     return new SyntheticPointerEvent({
       point,
       clientPoint,
@@ -175,7 +173,7 @@ export class DOMHostBridge implements IHostBridge {
       modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
       pressure: e.pressure || 0.5,
       // 命中拾取延迟到首次读取 target (多数移动监听者不读)
-      resolveTarget: hitTest && (() => hitTest(point)),
+      resolveTarget: () => this.engine.hitTestNode(point),
       onStopPropagation: () => e.stopPropagation()
     });
   }
@@ -196,7 +194,7 @@ export class DOMHostBridge implements IHostBridge {
     if (!isEditableTarget(e.target)) {
       this.container.focus({ preventScroll: true });
     }
-    this.onInteractionChange?.(true);
+    this.onInteractionChange(true);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerDown(canvasEvent);
   };
@@ -208,14 +206,14 @@ export class DOMHostBridge implements IHostBridge {
 
   private handlePointerUp = (e: PointerEvent): void => {
     this.flushPointerMove(e.pointerId);
-    this.onInteractionChange?.(false);
+    this.onInteractionChange(false);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerUp(canvasEvent);
   };
 
   private handlePointerCancel = (e: PointerEvent): void => {
     this.flushPointerMove(e.pointerId);
-    this.onInteractionChange?.(false);
+    this.onInteractionChange(false);
     this.engine.pointer.dispatchPointerCancel(this.toCanvasPointerEvent(e));
   };
 
@@ -267,7 +265,7 @@ export class DOMHostBridge implements IHostBridge {
     };
     this.engine.pointer.dispatchWheel(
       new SyntheticWheelEvent({
-        centerPoint: screenToWorld(clientPoint, this.getViewport()),
+        centerPoint: screenToWorld(clientPoint, this.engine.session.viewport),
         deltaPan: isZoom ? { x: 0, y: 0 } : { x: -wheel.deltaX, y: -wheel.deltaY },
         // 对数刻度：累加后取指数即为各次缩放倍率之积，合并与否结果一致
         deltaZoom: isZoom ? -wheel.deltaY * 0.002 : 0,
