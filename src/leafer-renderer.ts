@@ -12,7 +12,7 @@
  */
 
 import { Leafer, Group } from 'leafer';
-import type { SkyNoteEngine } from '@skynote/core';
+import type { CanvasRenderer, SkyNoteEngine } from '@skynote/core';
 import { computeViewportWorldBounds, expandBounds } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';
 import { LeaferOverlay } from './overlay/leafer-overlay';
@@ -34,7 +34,7 @@ const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
 /** 视锥缓冲边距：覆盖描边、箭头与路由外扩，避免边缘实体进出视野时闪烁 */
 const FRUSTUM_PADDING = 100;
 
-export class LeaferRenderer {
+export class LeaferRenderer implements CanvasRenderer {
   readonly nodeRenderers = new LeaferNodeRendererRegistry();
   /** 底层装饰 (点阵、网格) */
   readonly backgroundLayer = new Group();
