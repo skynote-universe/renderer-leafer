@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanvasPrimitive } from '@skynote/core';
+import type { Text } from 'leafer';
 
 // 注入 Node 环境下缺失的 Canvas 全局变量，使 Leafer 在非浏览器环境中安全初始化
 if (typeof globalThis.CanvasRenderingContext2D === 'undefined') {
@@ -61,46 +62,79 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
 
-const { Group, Rect, Text, Box, Image, Path } = await import('leafer');
-type TextShape = InstanceType<typeof Text>;
+const { Group, Rect, Box, Image, Path } = await import('leafer');
+type TextShape = Text;
 type RectShape = InstanceType<typeof Rect>;
-const { createLeaferShape, updateLeaferShape, reconcileLeaferShapes } =
-  await import('../src/primitives/primitive-mapper');
+const { PrimitiveMapper } = await import('../src/primitives/primitive-mapper');
+
+/** 替身字体测量：每个码点宽 = 字号 × 0.5 */
+const mapper = new PrimitiveMapper({ measureWidth: (text, font) => [...text].length * font.size * 0.5 });
+const createLeaferShape = (primitive: CanvasPrimitive) => mapper.create(primitive);
+const updateLeaferShape = (shape: Parameters<typeof mapper.update>[0], primitive: CanvasPrimitive) =>
+  mapper.update(shape, primitive);
 
 describe('Primitive Mapper', () => {
-  it('正确将 CanvasPrimitive 创建为 Leafer 图元，并映射文本高级排版属性', () => {
+  it('文字按内核排版逐片段绘制：分段样式、装饰线与背景色 (背景在文字下方)', () => {
     const textPrimitive: CanvasPrimitive = {
       kind: 'text',
       x: 10,
       y: 20,
-      text: 'SkyNote Architecture',
-      fontSize: 16,
-      textWrap: 'break-word',
-      textDecoration: ['underline', 'line-through'],
-      textOverflow: 'ellipsis'
+      runs: [
+        { text: 'Sky' },
+        { text: 'Note', fontWeight: 'bold', textDecoration: ['underline', 'line-through'], backgroundColor: '#FF0000' }
+      ],
+      style: { fontSize: 16, color: '#111111' }
     };
 
-    const textShape = createLeaferShape(textPrimitive) as TextShape;
-    expect(textShape).toBeInstanceOf(Text);
-    expect(textShape.text).toBe('SkyNote Architecture');
-    expect(textShape.x).toBe(10);
-    expect(textShape.y).toBe(20);
-    expect(textShape.textWrap).toBe('break');
-    expect(textShape.textDecoration).toBe('under-delete');
-    expect(textShape.textOverflow).toBe('ellipsis');
+    const group = createLeaferShape(textPrimitive) as InstanceType<typeof Group>;
+    expect(group).toBeInstanceOf(Group);
+    expect(group.x).toBe(10);
+    expect(group.y).toBe(20);
+    const [background, sky, note] = group.children as [RectShape, TextShape, TextShape];
+    expect(background).toBeInstanceOf(Rect);
+    expect(background).toMatchObject({ x: 24, y: 0, width: 32, height: 24, fill: '#FF0000' });
+    expect(sky).toMatchObject({ text: 'Sky', x: 0, fontSize: 16, fill: '#111111', textDecoration: 'none' });
+    expect(note).toMatchObject({ text: 'Note', x: 24, fontWeight: 'bold', textDecoration: 'under-delete' });
   });
 
-  it('排版框宽或高为 0 的文字不绘制 (Leafer 会把 0 当作未设置而画成整段单行)，框恢复后重新显示', () => {
-    const base: CanvasPrimitive = { kind: 'text', x: 0, y: 0, text: '很长的一段文字', width: 0, height: 20 };
-    const shape = createLeaferShape(base) as TextShape;
-    expect(shape.visible).toBe(false);
-    updateLeaferShape(shape, { ...base, width: 50, height: 0 });
-    expect(shape.visible).toBe(false);
-    updateLeaferShape(shape, { ...base, width: 50 });
-    expect(shape.visible).toBe(true);
-    // 不限宽高 (适应内容) 照常绘制
-    updateLeaferShape(shape, { ...base, width: undefined, height: undefined });
-    expect(shape.visible).toBe(true);
+  it('混排字号按基线对齐：各片段在 Leafer 中的基线 (y + (行高 + 0.7 × 字号) / 2) 相同', () => {
+    const group = createLeaferShape({
+      kind: 'text',
+      x: 0,
+      y: 0,
+      runs: [{ text: 'a' }, { text: 'B', fontSize: 40 }],
+      style: { fontSize: 20 }
+    }) as InstanceType<typeof Group>;
+    const baselines = (group.children as TextShape[]).map(
+      (text) => text.y! + ((text.lineHeight as number) + text.fontSize! * 0.7) / 2
+    );
+    expect(baselines[0]).toBeCloseTo(baselines[1]);
+  });
+
+  it('带 scrollY 的文字 (画布内编辑且超出文本框) 放进裁剪盒，内容上移 scrollY', () => {
+    const shape = createLeaferShape({
+      kind: 'text',
+      x: 10,
+      y: 20,
+      width: 100,
+      height: 40,
+      scrollY: 15,
+      runs: [{ text: 'a' }],
+      style: { fontSize: 20 }
+    }) as InstanceType<typeof Box>;
+    expect(shape).toBeInstanceOf(Box);
+    expect(shape).toMatchObject({ x: 10, y: 20, width: 100, height: 40, overflow: 'hide' });
+    const content = shape.children[0] as InstanceType<typeof Group>;
+    expect(content.y).toBe(-15);
+    expect((content.children[0] as TextShape).text).toBe('a');
+  });
+
+  it('排版框宽或高为 0 时没有放文字的空间，不绘制任何片段；框恢复后重新绘制', () => {
+    const base: CanvasPrimitive = { kind: 'text', x: 0, y: 0, runs: [{ text: '很长的一段文字' }], style: {}, width: 0 };
+    const group = createLeaferShape(base) as InstanceType<typeof Group>;
+    expect(group.children).toHaveLength(0);
+    updateLeaferShape(group, { ...base, width: 500 });
+    expect(group.children).toHaveLength(1);
   });
 
   it('updateLeaferShape 就地覆写已有图元，避免 GC 掉帧', () => {
@@ -167,7 +201,7 @@ describe('Primitive Mapper', () => {
     expect(updatedChild.fill).toBe('#00FF00');
   });
 
-  it('reconcileLeaferShapes 保持严格层级索引顺序并按需增删替换', () => {
+  it('reconcile 保持严格层级索引顺序并按需增删替换', () => {
     const parent = new Group();
     const s0 = new Rect({ x: 0, y: 0, width: 10, height: 10 });
     const s1 = new Rect({ x: 10, y: 10, width: 20, height: 20 });
@@ -176,18 +210,19 @@ describe('Primitive Mapper', () => {
 
     // 将 s0 替换为 Text，s1 就地更新，并新增第三个图元
     const newPrimitives: CanvasPrimitive[] = [
-      { kind: 'text', x: 0, y: 0, text: 'Replaced' },
+      { kind: 'text', x: 0, y: 0, runs: [{ text: 'Replaced' }], style: {} },
       { kind: 'rect', x: 15, y: 15, width: 30, height: 30 },
       { kind: 'line', points: [0, 0, 100, 100] }
     ];
 
-    const result = reconcileLeaferShapes(parent, [s0, s1], newPrimitives);
+    const result = mapper.reconcile(parent, [s0, s1], newPrimitives);
     expect(result.length).toBe(3);
     expect(parent.children.length).toBe(3);
 
-    // 索引 0 被替换为 Text，且位于第 0 位 (层级未颠倒)
-    expect(parent.children[0]).toBeInstanceOf(Text);
-    expect((parent.children[0] as TextShape).text).toBe('Replaced');
+    // 索引 0 被替换为文字分组，且位于第 0 位 (层级未颠倒)
+    const text = parent.children[0] as InstanceType<typeof Group>;
+    expect(text).toBeInstanceOf(Group);
+    expect((text.children[0] as TextShape).text).toBe('Replaced');
 
     // 索引 1 就地复用原 s1 对象
     expect(parent.children[1]).toBe(s1);

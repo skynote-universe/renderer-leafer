@@ -3,7 +3,7 @@
  * @description Leafer 渲染适配层的公共类型
  */
 
-import type { CanvasTheme, ViewportState } from '@skynote/core';
+import type { CanvasTheme, TextEditingTarget, ViewportState } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 
 /** 渲染器使用的 Leafer 图元 */
@@ -19,6 +19,8 @@ export interface LeaferRenderContext {
   readonly isInteracting: boolean;
   /** 当前主题 (切换时整体替换)，原生渲染器从此取色而非写死色值 */
   readonly theme: CanvasTheme;
+  /** 正在画布内编辑的文字块：该块不截断，编辑时看得到全部文字 */
+  readonly textEditing: TextEditingTarget | null;
 }
 
 /** 图层单帧同步结果 */

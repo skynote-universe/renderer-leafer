@@ -4,7 +4,7 @@ import { DETACHED_CANVAS_HOST, SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';
 import { LeaferAdapter } from '../src/adapter/leafer-adapter';
-import { LeaferTextMeasurer } from '../src/text/leafer-text-measurer';
+import { LeaferFontMeasurer } from '../src/text/leafer-font-measurer';
 
 describe('LeaferRenderer 场景树图层架构', () => {
   it('backgroundLayer 处于最底层，且独立于 contentLayer', () => {
@@ -152,11 +152,11 @@ describe('LeaferRenderer 场景树图层架构', () => {
 });
 
 describe('LeaferAdapter', () => {
-  it('成对提供 Leafer 文本测量器与渲染器，挂载即接管引擎宿主，销毁后解除', () => {
+  it('成对提供 Leafer 字体测量器与渲染器，挂载即接管引擎宿主，销毁后解除', () => {
     const adapter = new LeaferAdapter({ enableFrameScheduler: false });
-    expect(adapter.textMeasurer).toBeInstanceOf(LeaferTextMeasurer);
+    expect(adapter.fonts).toBeInstanceOf(LeaferFontMeasurer);
 
-    const engine = new SkyNoteEngine({ textMeasurer: adapter.textMeasurer });
+    const engine = new SkyNoteEngine({ fonts: adapter.fonts });
     const renderer = adapter.mount(engine, document.createElement('div'));
     expect(renderer).toBeInstanceOf(LeaferRenderer);
     expect(engine.host).not.toBe(DETACHED_CANVAS_HOST);

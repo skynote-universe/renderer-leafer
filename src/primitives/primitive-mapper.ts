@@ -3,35 +3,38 @@
  * @description 声明式图元 (CanvasPrimitive) → Leafer 图元：新建、就地更新与列表对齐
  *
  * 设计考量 (Why):
- * 1. 每种图元只有一份属性映射：新建是 new Shape(props)，更新是 shape.set(props)，两条路径不会分叉。
+ * 1. 每种图元只有一份描述 (类 + 属性 + 子描述)：新建是 new Shape(props)，更新是 shape.set(props)，两条路径不会分叉。
  * 2. 更新只复用同一个类的图元 (按构造函数精确匹配)：Image 继承 Rect、Box 继承 Group，用 instanceof 会把
  *    图片当矩形、盒子当分组复用，属性错位。
  * 3. 未设置的可选字段显式写入默认值 (如 opacity 为 1)，就地更新时不会残留上一次的值。
- * 4. 像素对齐由 Leafer 画布的 pixelSnap 在绘制时按屏幕像素完成，这里保持世界坐标原值。
+ * 4. 文字不交给 Leafer 排版：按内核排版结果 (layoutText) 逐片段绘制单行 Text，背景色画在片段下方；
+ *    片段的 y 由基线反推 (Leafer 单行文字的基线在行框内的位置与内核基线模型一致)，混排字号也按基线对齐 (ADR-122)。
+ * 5. 像素对齐由 Leafer 画布的 pixelSnap 在绘制时按屏幕像素完成，这里保持世界坐标原值。
  */
 
-import type {
-  CanvasPrimitive,
-  FontWeight,
-  LineHeight,
-  OverflowMode,
-  StrokeAlign,
-  StrokeCap,
-  StrokeJoin,
-  TextDecoration,
-  TextOverflow,
-  TextWrap
+import {
+  layoutText,
+  type CanvasPrimitive,
+  type FontMeasurer,
+  type OverflowMode,
+  type StrokeAlign,
+  type StrokeCap,
+  type StrokeJoin,
+  type TextFragment,
+  type TextPrimitive
 } from '@skynote/core';
 import { Box, Ellipse, Group, Image, Line, Path, Polygon, Rect, Text } from 'leafer';
 import type { ISolidPaint, IUIInputData } from 'leafer';
 import type { LeaferShape } from '../types';
+import { toLeaferFontWeight } from '../text/leafer-font-measurer';
 
 type ShapeClass = new (props: IUIInputData) => LeaferShape;
 
-/** 图元描述：对应的 Leafer 类与属性 */
+/** 图元描述：对应的 Leafer 类、属性与子图元描述 (分组、盒子与文字片段) */
 interface ShapeSpec {
   readonly Shape: ShapeClass;
   readonly props: IUIInputData;
+  readonly children?: readonly ShapeSpec[];
 }
 
 /** 可描边图元的公共字段 */
@@ -48,17 +51,6 @@ const LEAFER_STROKE_CAP: Record<StrokeCap, 'round' | 'square' | 'none'> = {
   butt: 'none',
   round: 'round',
   square: 'square'
-};
-const LEAFER_TEXT_WRAP: Record<TextWrap, 'normal' | 'none' | 'break'> = {
-  normal: 'normal',
-  none: 'none',
-  'break-all': 'break',
-  'break-word': 'break'
-};
-const LEAFER_TEXT_OVERFLOW: Record<TextOverflow, 'show' | 'hide' | 'ellipsis'> = {
-  none: 'show',
-  clip: 'hide',
-  ellipsis: 'ellipsis'
 };
 const LEAFER_OVERFLOW: Record<OverflowMode, 'show' | 'hide'> = { visible: 'show', hidden: 'hide' };
 
@@ -83,29 +75,39 @@ function strokeProps(p: StrokeFields): IUIInputData {
   };
 }
 
-/** 数字行高为字号倍数 → Leafer 百分比行高；'24px' → 像素值 */
-function toLeaferLineHeight(lineHeight: LineHeight | undefined): IUIInputData['lineHeight'] {
-  if (lineHeight === undefined) return undefined;
-  return typeof lineHeight === 'number' ? { type: 'percent', value: lineHeight } : Number.parseFloat(lineHeight);
+/** 单行文字片段：y 由基线反推 (Leafer 单行文字基线距行框顶 (行高 + 0.7 × 字号) / 2) */
+function describeFragment(fragment: TextFragment, baseline: number): ShapeSpec {
+  const { style } = fragment;
+  const { font } = style;
+  return {
+    Shape: Text,
+    props: {
+      x: fragment.x,
+      y: baseline - (style.lineHeight + font.size * 0.7) / 2,
+      text: fragment.text,
+      fontSize: font.size,
+      fontFamily: font.family,
+      fontWeight: toLeaferFontWeight(font.weight),
+      italic: font.style !== 'normal',
+      lineHeight: style.lineHeight,
+      letterSpacing: style.letterSpacing,
+      fill: style.color,
+      textDecoration: style.underline
+        ? style.lineThrough
+          ? 'under-delete'
+          : 'under'
+        : style.lineThrough
+          ? 'delete'
+          : 'none'
+    }
+  };
 }
 
-function toLeaferFontWeight(weight: FontWeight | undefined): IUIInputData['fontWeight'] {
-  if (weight === 'bolder') return 'bold';
-  if (weight === 'lighter') return 'normal';
-  return weight;
-}
-
-function toLeaferTextDecoration(decoration: TextDecoration | undefined): 'none' | 'under' | 'delete' | 'under-delete' {
-  const lines =
-    decoration === undefined || decoration === 'none' ? [] : Array.isArray(decoration) ? decoration : [decoration];
-  const under = lines.includes('underline');
-  const strike = lines.includes('line-through');
-  return under && strike ? 'under-delete' : under ? 'under' : strike ? 'delete' : 'none';
-}
-
-function describe(p: CanvasPrimitive): ShapeSpec {
+function describe(p: CanvasPrimitive, fonts: FontMeasurer): ShapeSpec {
   const opacity = p.opacity ?? 1;
   switch (p.kind) {
+    case 'text':
+      return describeText(p, fonts);
     case 'rect':
       return {
         Shape: Rect,
@@ -117,33 +119,6 @@ function describe(p: CanvasPrimitive): ShapeSpec {
           fill: paint(p.fill, p.fillOpacity),
           ...strokeProps(p),
           cornerRadius: p.radius,
-          opacity
-        }
-      };
-    case 'text':
-      return {
-        Shape: Text,
-        props: {
-          x: p.x,
-          y: p.y,
-          text: p.text,
-          width: p.width,
-          height: p.height,
-          fontSize: p.fontSize ?? 14,
-          fontFamily: p.fontFamily,
-          fontWeight: toLeaferFontWeight(p.fontWeight),
-          italic: p.fontStyle === 'italic',
-          fill: p.fill,
-          textAlign: p.textAlign,
-          verticalAlign: p.verticalAlign,
-          textBaseline: p.textBaseline,
-          lineHeight: toLeaferLineHeight(p.lineHeight),
-          letterSpacing: p.letterSpacing,
-          textWrap: p.textWrap && LEAFER_TEXT_WRAP[p.textWrap],
-          textDecoration: toLeaferTextDecoration(p.textDecoration),
-          textOverflow: p.textOverflow && LEAFER_TEXT_OVERFLOW[p.textOverflow],
-          // Leafer 把宽或高为 0 视同未设置 (不折行、不裁剪，整段画成一行)：排版框为 0 时没有放文字的空间，不绘制
-          visible: (p.width === undefined || p.width > 0) && (p.height === undefined || p.height > 0),
           opacity
         }
       };
@@ -223,7 +198,11 @@ function describe(p: CanvasPrimitive): ShapeSpec {
         }
       };
     case 'group':
-      return { Shape: Group, props: { x: p.x ?? 0, y: p.y ?? 0, rotation: p.rotation ?? 0, opacity } };
+      return {
+        Shape: Group,
+        props: { x: p.x ?? 0, y: p.y ?? 0, rotation: p.rotation ?? 0, opacity },
+        children: p.children.map((child) => describe(child, fonts))
+      };
     case 'box':
       return {
         Shape: Box,
@@ -238,56 +217,112 @@ function describe(p: CanvasPrimitive): ShapeSpec {
           cornerRadius: p.radius,
           overflow: LEAFER_OVERFLOW[p.overflow ?? 'visible'],
           opacity
-        }
+        },
+        children: p.children.map((child) => describe(child, fonts))
       };
   }
 }
 
-/** 由图元新建 Leafer 图元 (含子图元) */
-export function createLeaferShape(primitive: CanvasPrimitive): LeaferShape {
-  const { Shape, props } = describe(primitive);
-  const shape = new Shape(props);
-  if (primitive.kind === 'group' || primitive.kind === 'box') {
-    for (const child of primitive.children) (shape as Group).add(createLeaferShape(child));
+/** 文字：按内核排版逐行逐片段展开，背景色矩形在前 (位于文字下方) */
+function describeText(p: TextPrimitive, fonts: FontMeasurer): ShapeSpec {
+  const layout = layoutText(p.runs, p.style, { width: p.width, height: p.height }, fonts);
+  const backgrounds: ShapeSpec[] = [];
+  const fragments: ShapeSpec[] = [];
+  for (const line of layout.lines) {
+    for (const fragment of line.fragments) {
+      if (fragment.style.backgroundColor) {
+        backgrounds.push({
+          Shape: Rect,
+          props: {
+            x: fragment.x,
+            y: line.top,
+            width: fragment.width,
+            height: line.height,
+            fill: fragment.style.backgroundColor
+          }
+        });
+      }
+      fragments.push(describeFragment(fragment, line.baseline));
+    }
   }
+  const children = [...backgrounds, ...fragments];
+  const opacity = p.opacity ?? 1;
+  if (p.scrollY === undefined || p.height === undefined) {
+    return { Shape: Group, props: { x: p.x, y: p.y, rotation: 0, opacity }, children };
+  }
+  // 画布内编辑且文字超出文本框：裁剪到文本框，内容上移 scrollY
+  return {
+    Shape: Box,
+    props: {
+      x: p.x,
+      y: p.y,
+      width: p.width ?? layout.width,
+      height: p.height,
+      rotation: 0,
+      overflow: 'hide',
+      opacity
+    },
+    children: [{ Shape: Group, props: { x: 0, y: -p.scrollY, rotation: 0, opacity: 1 }, children }]
+  };
+}
+
+function build(spec: ShapeSpec): LeaferShape {
+  const shape = new spec.Shape(spec.props);
+  if (spec.children) for (const child of spec.children) (shape as Group).add(build(child));
   return shape;
 }
 
-/**
- * 就地更新已有图元；类型不一致时返回 false，由调用方替换
- */
-export function updateLeaferShape(shape: LeaferShape, primitive: CanvasPrimitive): boolean {
-  const { Shape, props } = describe(primitive);
-  if (shape.constructor !== Shape) return false;
-  shape.set(props);
-  if (primitive.kind === 'group' || primitive.kind === 'box') {
+/** 就地更新；类不一致时返回 false，由调用方替换 */
+function apply(shape: LeaferShape, spec: ShapeSpec): boolean {
+  if (shape.constructor !== spec.Shape) return false;
+  shape.set(spec.props);
+  if (spec.children) {
     const group = shape as Group;
-    reconcileLeaferShapes(group, group.children as LeaferShape[], primitive.children);
+    reconcile(group, group.children as LeaferShape[], spec.children);
   }
   return true;
 }
 
-/**
- * 按位置对齐图元列表：同位置同类型就地更新，否则替换；多余的移除，不足的补齐
- * @returns 对齐后的图元列表 (与 primitives 一一对应)
- */
-export function reconcileLeaferShapes(
-  parent: Group,
-  existing: readonly LeaferShape[],
-  primitives: readonly CanvasPrimitive[]
-): LeaferShape[] {
+function reconcile(parent: Group, existing: readonly LeaferShape[], specs: readonly ShapeSpec[]): LeaferShape[] {
   const result: LeaferShape[] = [];
-  for (let i = 0; i < primitives.length; i++) {
+  for (let i = 0; i < specs.length; i++) {
     const shape = existing[i];
-    if (shape && updateLeaferShape(shape, primitives[i])) {
+    if (shape && apply(shape, specs[i])) {
       result.push(shape);
       continue;
     }
     shape?.remove();
-    const created = createLeaferShape(primitives[i]);
+    const created = build(specs[i]);
     parent.addAt(created, i);
     result.push(created);
   }
-  for (let i = primitives.length; i < existing.length; i++) existing[i].remove();
+  for (let i = specs.length; i < existing.length; i++) existing[i].remove();
   return result;
+}
+
+/** 图元映射器：持有字体测量器，文字按内核排版绘制 */
+export class PrimitiveMapper {
+  constructor(private readonly fonts: FontMeasurer) {}
+
+  /** 由图元新建 Leafer 图元 (含子图元) */
+  create(primitive: CanvasPrimitive): LeaferShape {
+    return build(describe(primitive, this.fonts));
+  }
+
+  /** 就地更新已有图元；类型不一致时返回 false，由调用方替换 */
+  update(shape: LeaferShape, primitive: CanvasPrimitive): boolean {
+    return apply(shape, describe(primitive, this.fonts));
+  }
+
+  /**
+   * 按位置对齐图元列表：同位置同类型就地更新，否则替换；多余的移除，不足的补齐
+   * @returns 对齐后的图元列表 (与 primitives 一一对应)
+   */
+  reconcile(parent: Group, existing: readonly LeaferShape[], primitives: readonly CanvasPrimitive[]): LeaferShape[] {
+    return reconcile(
+      parent,
+      existing,
+      primitives.map((primitive) => describe(primitive, this.fonts))
+    );
+  }
 }

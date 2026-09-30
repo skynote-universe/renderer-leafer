@@ -1,10 +1,8 @@
 import './setup';
 import { describe, it, expect } from 'vitest';
-import type { Text } from 'leafer';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';
-import { createLeaferShape } from '../src/primitives/primitive-mapper';
 
 function mount(engine: SkyNoteEngine) {
   const container = document.createElement('div');
@@ -62,17 +60,5 @@ describe('旋转约定在渲染层的落地', () => {
     expect(engine.hitTestNode({ x: bounds.left + 2, y: bounds.top + 2 })).toBeUndefined();
     expect(engine.hitTestNode({ x: 200, y: 150 })?.id).toBe('n');
     renderer.destroy();
-  });
-});
-
-describe('行高单位映射', () => {
-  it('数字按字号倍数、px 字符串按像素，两种写法等价时排版高度一致', () => {
-    const base = { kind: 'text' as const, x: 0, y: 0, text: 'a b c d e f g h', width: 30, fontSize: 10 };
-    const ratio = createLeaferShape({ ...base, lineHeight: 2 }) as Text;
-    const pixels = createLeaferShape({ ...base, lineHeight: '20px' }) as Text;
-
-    expect(ratio.lineHeight).toEqual({ type: 'percent', value: 2 });
-    expect(pixels.lineHeight).toBe(20);
-    expect(ratio.getBounds('box', 'inner').height).toBe(pixels.getBounds('box', 'inner').height);
   });
 });

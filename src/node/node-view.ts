@@ -17,12 +17,13 @@ import type {
   EntityVersions,
   NodeEntity,
   NodeFill,
-  NodeTypeRegistry
+  NodeTypeRegistry,
+  TextEditingTarget
 } from '@skynote/core';
-import { applyThemeToPrimitives, resolveThemeColor } from '@skynote/core';
+import { applyThemeToPrimitives, editingTextPrimitive, resolveThemeColor } from '@skynote/core';
 import type { LeaferRenderContext, LeaferShape } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
-import { reconcileLeaferShapes } from '../primitives/primitive-mapper';
+import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 
 /** 本帧要求的节点细节档位 */
 export type NodeRenderDetail = 'full' | 'placeholder';
@@ -31,6 +32,7 @@ export type NodeRenderDetail = 'full' | 'placeholder';
 export interface NodeViewEnvironment {
   readonly nodeTypes: NodeTypeRegistry;
   readonly renderers: LeaferNodeRendererRegistry;
+  readonly mapper: PrimitiveMapper;
 }
 
 /** 渐变填充在占位与兜底矩形中退化为首个色标 */
@@ -53,6 +55,8 @@ export class NodeView {
   private contentWidth = -1;
   private contentHeight = -1;
   private theme: CanvasTheme | null = null;
+  /** 内容生成时本节点的编辑视图 (编辑块、滚动与输入法组合文字)；会话每次变化整体替换，按引用比较 */
+  private editing: TextEditingTarget | null = null;
   /** 当前内容档位；broken 为渲染崩溃后的降级占位框 */
   private detail: NodeRenderDetail | 'broken' | null = null;
 
@@ -105,14 +109,17 @@ export class NodeView {
     // 已崩溃降级的节点视同占位档位，只在数据、尺寸或主题变化时重试
     const renderedDetail = this.detail === 'broken' ? detail : this.detail;
     const sizeChanged = node.width !== this.contentWidth || node.height !== this.contentHeight;
+    const editing = context.textEditing?.nodeId === node.id ? context.textEditing : null;
     if (
       versions.dataVersion === this.dataVersion &&
       !sizeChanged &&
       context.theme === this.theme &&
+      editing === this.editing &&
       renderedDetail === detail
     ) {
       return;
     }
+    this.editing = editing;
     this.dataVersion = versions.dataVersion;
     this.contentWidth = node.width;
     this.contentHeight = node.height;
@@ -153,8 +160,19 @@ export class NodeView {
 
       // 未注册类型兜底为按节点样式绘制的矩形
       const definition = this.env.nodeTypes.get(node.nodeType);
+      const { editing } = this;
       const primitives: CanvasPrimitive[] = definition?.compose
-        ? applyThemeToPrimitives(definition.compose(node, { theme }), theme)
+        ? applyThemeToPrimitives(
+            // 编辑中的文字块换成编辑视图 (与编辑插件同一函数)：不截断、按滚动裁剪、插入输入法组合文字
+            definition
+              .compose(node, { theme })
+              .map((primitive) =>
+                editing && primitive.kind === 'text' && primitive.id === editing.blockId
+                  ? editingTextPrimitive(primitive, editing)
+                  : primitive
+              ),
+            theme
+          )
         : [
             {
               kind: 'rect',
@@ -169,7 +187,7 @@ export class NodeView {
             }
           ];
       if (this.detail !== 'full') this.discardShapes();
-      this.shapes = reconcileLeaferShapes(this.content, this.shapes, primitives);
+      this.shapes = this.env.mapper.reconcile(this.content, this.shapes, primitives);
       this.detail = 'full';
     } catch (err) {
       console.error(`[LeaferRenderer] 节点 ${node.id} (${node.nodeType}) 渲染失败，已降级为占位框:`, err);
@@ -186,7 +204,7 @@ export class NodeView {
   private renderPlaceholder(theme: CanvasTheme): void {
     const { node } = this;
     if (this.detail === 'full') this.discardShapes();
-    this.shapes = reconcileLeaferShapes(this.content, this.shapes, [
+    this.shapes = this.env.mapper.reconcile(this.content, this.shapes, [
       {
         kind: 'rect',
         x: 0,

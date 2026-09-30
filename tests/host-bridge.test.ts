@@ -2,6 +2,7 @@ import './setup';
 import { describe, it, expect, vi } from 'vitest';
 import { DETACHED_CANVAS_HOST, SkyNoteEngine } from '@skynote/core';
 import type { CanvasPointerEvent, NodeEntity } from '@skynote/core';
+import { TEXT_INPUT_ATTRIBUTE } from '../src/bridge/dom-text-input';
 import { DOMHostBridge } from '../src/bridge/host-bridge';
 
 /** 最小化容器替身：记录监听函数与 getBoundingClientRect 调用次数 */
@@ -107,7 +108,7 @@ describe('DOMHostBridge 高频指针事件', () => {
     bridge.destroy();
   });
 
-  it('键盘经容器焦点进入焦点栈：容器可聚焦、按下指针时获焦，来自可编辑元素的按键不转发', () => {
+  it('键盘经容器焦点进入焦点栈：容器可聚焦、按下指针时获焦，来自可编辑元素的按键不转发 (画布文字输入通道除外)', () => {
     const engine = new SkyNoteEngine();
     const container = new FakeContainer();
     const bridge = new DOMHostBridge({
@@ -130,18 +131,30 @@ describe('DOMHostBridge 高频指针事件', () => {
 
     container.fire('pointerdown', {});
     expect(container.focusCalls).toBe(1);
-    container.fire('pointerdown', { target: { tagName: 'TEXTAREA', isContentEditable: false } });
+    /** 替身元素：attribute 为画布文字输入通道的标记时视为该通道 */
+    const element = (tagName: string, isContentEditable = false, attribute?: string) => ({
+      tagName,
+      isContentEditable,
+      hasAttribute: (name: string) => name === attribute
+    });
+    container.fire('pointerdown', { target: element('TEXTAREA') });
     expect(container.focusCalls).toBe(1);
 
     container.fire('keydown', { key: 'Delete', code: 'Delete', isComposing: false });
     container.fire('keydown', {
       key: 'Backspace',
       code: 'Backspace',
-      target: { tagName: 'INPUT', isContentEditable: false }
+      target: element('INPUT')
     });
-    container.fire('keydown', { key: 'a', code: 'KeyA', target: { tagName: 'DIV', isContentEditable: true } });
+    container.fire('keydown', { key: 'a', code: 'KeyA', target: element('DIV', true) });
     container.fire('keydown', { key: 'Process', code: 'KeyN', isComposing: true });
-    expect(keys).toEqual(['Delete']);
+    container.fire('keydown', {
+      key: 'ArrowLeft',
+      code: 'ArrowLeft',
+      isComposing: false,
+      target: element('TEXTAREA', false, TEXT_INPUT_ATTRIBUTE)
+    });
+    expect(keys).toEqual(['Delete', 'ArrowLeft']);
     bridge.destroy();
   });
 });

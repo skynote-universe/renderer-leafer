@@ -7,6 +7,7 @@ import type { Group } from 'leafer';
 import type { SkyNoteEngine } from '@skynote/core';
 import type { LayerSyncResult, LeaferRenderContext } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
+import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 import { NodeView, type NodeRenderDetail, type NodeViewEnvironment } from '../node/node-view';
 import { VisibilityTracker } from './visibility-tracker';
 
@@ -14,6 +15,7 @@ export interface NodeLayerOptions {
   contentLayer: Group;
   engine: SkyNoteEngine;
   renderers: LeaferNodeRendererRegistry;
+  mapper: PrimitiveMapper;
   offscreenCacheLimit: number;
 }
 
@@ -31,7 +33,7 @@ export class NodeLayer {
 
   constructor(private readonly options: NodeLayerOptions) {
     this.visibility = new VisibilityTracker(options.offscreenCacheLimit);
-    this.env = { nodeTypes: options.engine.nodeTypes, renderers: options.renderers };
+    this.env = { nodeTypes: options.engine.nodeTypes, renderers: options.renderers, mapper: options.mapper };
   }
 
   /** 当前持有的视图数 (含离屏保留) */

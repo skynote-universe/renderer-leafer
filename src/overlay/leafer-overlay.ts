@@ -11,7 +11,7 @@
 import type { CanvasPrimitive, OverlayChannel, OverlayOptions } from '@skynote/core';
 import { Group } from 'leafer';
 import type { LeaferShape } from '../types';
-import { reconcileLeaferShapes } from '../primitives/primitive-mapper';
+import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 
 interface OverlaySession {
   readonly group: Group;
@@ -22,7 +22,10 @@ interface OverlaySession {
 export class LeaferOverlay implements OverlayChannel {
   private readonly sessions = new Map<string, OverlaySession>();
 
-  constructor(private readonly layer: Group) {}
+  constructor(
+    private readonly layer: Group,
+    private readonly mapper: PrimitiveMapper
+  ) {}
 
   /** 空数组即清除该会话 */
   setPrimitives(sessionId: string, primitives: readonly CanvasPrimitive[], options?: OverlayOptions): void {
@@ -37,7 +40,7 @@ export class LeaferOverlay implements OverlayChannel {
       this.sessions.set(sessionId, session);
     }
     session.transient = options?.transient ?? false;
-    session.shapes = reconcileLeaferShapes(session.group, session.shapes, primitives);
+    session.shapes = this.mapper.reconcile(session.group, session.shapes, primitives);
   }
 
   clear(sessionId: string): void {

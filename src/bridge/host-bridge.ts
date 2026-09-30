@@ -7,7 +7,8 @@
  * 2. 坐标归一化：DOM 原生事件解算为视口与世界逻辑坐标，挂载 claimPointer 独占裁判；
  * 3. 资源成对销毁：destroy() 卸载所有事件监听，无任何残留。
  * 4. 键盘经容器焦点进入 ADR-005 焦点栈：画布容器可聚焦、按下指针时获得焦点，只在画布持有焦点时响应快捷键；
- *    来自输入框与可编辑区域 (含 mountDOM 嵌入的编辑器) 的按键不转发，避免打字时误触删除等快捷键。
+ *    来自输入框与可编辑区域 (含 mountDOM 嵌入的编辑器) 的按键不转发，避免打字时误触删除等快捷键；
+ *    画布文字编辑的隐藏输入通道例外，它的编辑按键正是交给键盘作用域处理的 (ADR-122)。
  * 5. 高频事件零强制布局：容器矩形缓存复用，仅在尺寸变化、页面滚动或新手势开始时刷新，
  *    避免 pointermove 每次调用 getBoundingClientRect 触发同步重排；命中拾取延迟到首次读取 target 时才计算。
  * 6. 按帧合并高频输入：120Hz / 240Hz 设备一帧内会收到多次 pointermove 与滚轮，逐个分发会让拖拽在一帧内提交多次事务。
@@ -21,14 +22,18 @@ import type {
   OverlayChannel,
   Point,
   SkyNoteEngine,
-  SystemCursor
+  SystemCursor,
+  TextInputHandler,
+  TextInputSession
 } from '@skynote/core';
-import { SyntheticPointerEvent, SyntheticWheelEvent, screenToWorld } from '@skynote/core';
+import { ClickCounter, SyntheticPointerEvent, SyntheticWheelEvent, screenToWorld } from '@skynote/core';
+import { DOMTextInput, TEXT_INPUT_ATTRIBUTE } from './dom-text-input';
 
-/** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键) */
+/** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键)；画布自己的隐藏输入通道除外 */
 function isEditableTarget(target: EventTarget | null): boolean {
   const element = target as HTMLElement | null;
   if (!element || typeof element.tagName !== 'string') return false;
+  if (element.hasAttribute(TEXT_INPUT_ATTRIBUTE)) return false;
   return (
     element.isContentEditable ||
     element.tagName === 'INPUT' ||
@@ -70,6 +75,10 @@ export class DOMHostBridge implements CanvasHost {
   private pendingWheels = new Map<boolean, PendingWheel>();
   private containerRect: DOMRect | null = null;
   private resizeObserver: ResizeObserver | null = null;
+  private readonly clicks = new ClickCounter();
+  /** 按下时的连击序号，移动与抬起沿用 */
+  private clickCount = 1;
+  private textInput: DOMTextInput | null = null;
 
   constructor(options: HostBridgeOptions) {
     this.overlay = options.overlay;
@@ -102,6 +111,14 @@ export class DOMHostBridge implements CanvasHost {
     }
   }
 
+  openTextInput(handler: TextInputHandler): TextInputSession {
+    this.textInput?.close();
+    this.textInput = new DOMTextInput(this.container, handler, (session) => {
+      if (this.textInput === session) this.textInput = null;
+    });
+    return this.textInput;
+  }
+
   /** 分发本帧合并后的指针移动与滚轮 (由渲染器在帧开始时调用) */
   flushPendingInput(): void {
     if (this.pendingMoves.size > 0) {
@@ -119,6 +136,7 @@ export class DOMHostBridge implements CanvasHost {
   }
 
   destroy(): void {
+    this.textInput?.close();
     this.pendingMoves.clear();
     this.pendingWheels.clear();
     this.abortController.abort();
@@ -175,6 +193,7 @@ export class DOMHostBridge implements CanvasHost {
       button: e.button,
       modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
       pressure: e.pressure || 0.5,
+      clickCount: this.clickCount,
       // 命中拾取延迟到首次读取 target (多数移动监听者不读)
       resolveTarget: () => this.engine.hitTestNode(point),
       onStopPropagation: () => e.stopPropagation()
@@ -194,12 +213,16 @@ export class DOMHostBridge implements CanvasHost {
     // 新手势开始时兜底刷新一次，覆盖 CSS transform 等观察器无法感知的位移
     this.containerRect = null;
     // 点在画布上即获得键盘焦点；点在嵌入的可编辑区域时让其保留焦点
-    if (!isEditableTarget(e.target)) {
+    if (!this.textInput && !isEditableTarget(e.target)) {
       this.container.focus({ preventScroll: true });
     }
     this.onInteractionChange(true);
+    const rect = this.getContainerRect();
+    this.clickCount = this.clicks.press({ x: e.clientX - rect.left, y: e.clientY - rect.top }, e.button, e.timeStamp);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerDown(canvasEvent);
+    // 文字编辑中 (含本次按下刚进入编辑)：焦点须留在输入通道，阻止默认行为使随后的兼容 mousedown 不把焦点抢回容器
+    if (this.textInput) e.preventDefault();
   };
 
   private handlePointerMove = (e: PointerEvent): void => {

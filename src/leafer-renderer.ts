@@ -16,6 +16,8 @@ import type { CanvasRenderer, SkyNoteEngine } from '@skynote/core';
 import { computeViewportWorldBounds, expandBounds } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';
 import { LeaferOverlay } from './overlay/leafer-overlay';
+import { PrimitiveMapper } from './primitives/primitive-mapper';
+import { LeaferFontMeasurer } from './text/leafer-font-measurer';
 import { DOMHostBridge } from './bridge/host-bridge';
 import { LeaferNodeRendererRegistry } from './registry/leafer-node-renderer-registry';
 import { FrameCommitScheduler } from './scheduler/frame-commit-scheduler';
@@ -92,11 +94,14 @@ export class LeaferRenderer implements CanvasRenderer {
     this.applyViewportTransform();
     session.setViewportSize({ width: container.clientWidth, height: container.clientHeight });
 
-    this.overlay = new LeaferOverlay(overlayLayer);
+    // 绘制文字必须用 Leafer 自己的测量 (与画出的字形一致)，不借用引擎上可能被替换的测量器
+    const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
+    this.overlay = new LeaferOverlay(overlayLayer, mapper);
     this.nodeLayer = new NodeLayer({
       contentLayer: this.contentLayer,
       engine,
       renderers: this.nodeRenderers,
+      mapper,
       offscreenCacheLimit
     });
     this.connectorLayer = new ConnectorLayer({ engine, offscreenCacheLimit });
@@ -238,7 +243,8 @@ export class LeaferRenderer implements CanvasRenderer {
     const context: LeaferRenderContext = {
       viewport: session.viewport,
       isInteracting: this.isInteracting,
-      theme: session.theme
+      theme: session.theme,
+      textEditing: session.textEditing
     };
     const nodeSync = nodeLayer.sync(
       visibleNodeIds,
