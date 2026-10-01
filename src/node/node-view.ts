@@ -7,7 +7,9 @@
  *    选中态不参与 (ADR-110)，框选上千节点不触发任何内容重建。
  * 2. 单节点崩溃防白屏：内容渲染异常局部捕获并降级为占位框，直到数据或主题再次变化才重试，避免每帧重复抛错。
  * 3. 内容裁剪：节点类型声明 clipContent 时，内容图元放进 overflow: 'hide' 的 Box，超出外框的部分不绘制。
- * 4. 旋转约定：绕节点中心旋转，x / y 为未旋转框左上角在父容器中的局部坐标 (origin 不改变定位，around 会改变)。
+ * 4. 旋转约定：绕节点中心旋转，x / y 为未旋转框左上角在父容器中的局部坐标。位置由内核局部矩阵直接给出
+ *    (旋转后左上角所在位置，Leafer 绕自身原点旋转)；不用 Leafer 的 origin: 'center'——分组的「中心」取自子图元的
+ *    实际包围盒而非节点宽高，子节点拖出容器时旋转容器的中心随之漂移，容器与子节点都会错位。
  */
 
 import { Box, Group } from 'leafer';
@@ -20,7 +22,7 @@ import type {
   NodeTypeRegistry,
   TextEditingTarget
 } from '@skynote/core';
-import { applyThemeToPrimitives, editingTextPrimitive, resolveThemeColor } from '@skynote/core';
+import { applyThemeToPrimitives, computeNodeLocalMatrix, editingTextPrimitive, resolveThemeColor } from '@skynote/core';
 import type { LeaferRenderContext, LeaferShape } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
@@ -93,14 +95,8 @@ export class NodeView {
   ): void {
     this.node = node;
     if (versions.geomVersion !== this.geomVersion) {
-      this.group.set({
-        x: node.x,
-        y: node.y,
-        width: node.width,
-        height: node.height,
-        rotation: node.rotation,
-        origin: 'center'
-      });
+      const local = computeNodeLocalMatrix(node);
+      this.group.set({ x: local.e, y: local.f, rotation: node.rotation });
       if (this.childrenGroup instanceof Box) this.childrenGroup.set({ width: node.width, height: node.height });
       if (this.content instanceof Box) this.content.set({ width: node.width, height: node.height });
       this.geomVersion = versions.geomVersion;

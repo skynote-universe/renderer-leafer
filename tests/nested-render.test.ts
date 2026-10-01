@@ -73,10 +73,11 @@ describe('嵌套渲染 (ADR-114)', () => {
     expect(renderer.contentLayer.children).toEqual([nodeLayer.getGroup('frame')]);
     expectBoundsClose(sceneBounds(renderer, cardGroup), engine.getNodeWorldBounds('card')!);
 
-    // 移动容器：只有容器图元变化，子节点随之移动且与内核一致
+    // 移动容器：只有容器图元变化，子节点自身的变换不变，随容器移动且与内核一致
+    const before = { x: cardGroup.x, y: cardGroup.y };
     store.moveNodes(['frame'], { x: 50, y: -20 });
     renderer.renderFrame();
-    expect(cardGroup.x).toBe(20);
+    expect({ x: cardGroup.x, y: cardGroup.y }).toEqual(before);
     expectBoundsClose(sceneBounds(renderer, cardGroup), engine.getNodeWorldBounds('card')!);
     renderer.destroy();
   });
