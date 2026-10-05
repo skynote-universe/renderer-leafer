@@ -226,14 +226,14 @@ describe('DOMHostBridge 按帧合并输入', () => {
     bridge.destroy();
   });
 
-  it('setCursor: rotate 与 rotate-xxx 会映射为 SVG Data URI 形式的单弧旋转光标', () => {
+  it('setCursor: 旋转光标按角度生成 SVG (按 15° 取整)，系统光标原样写入', () => {
     const { container, bridge } = setup();
-    bridge.setCursor('rotate');
+    bridge.setCursor({ kind: 'rotate', angle: 0 });
     expect(container.style.cursor).toContain('data:image/svg+xml');
     expect(container.style.cursor).toContain('16 16, crosshair');
 
-    bridge.setCursor('rotate-45');
-    expect(decodeURIComponent(container.style.cursor)).toContain('rotate(45 16 16)');
+    bridge.setCursor({ kind: 'rotate', angle: -134 });
+    expect(decodeURIComponent(container.style.cursor)).toContain('rotate(225 16 16)');
 
     bridge.setCursor('default');
     expect(container.style.cursor).toBe('default');

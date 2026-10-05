@@ -68,8 +68,8 @@ function strokeProps(p: StrokeFields): IUIInputData {
   return {
     stroke: p.stroke,
     strokeWidth: p.strokeWidth,
+    // Leafer 的虚线属性名为 dashPattern
     dashPattern: p.strokeDashArray,
-    strokeDashArray: p.strokeDashArray,
     strokeCap: toLeaferStrokeCap(p.strokeCap),
     strokeJoin: p.strokeJoin,
     strokeAlign: p.strokeAlign
@@ -248,15 +248,11 @@ function describeText(p: TextPrimitive, fonts: FontMeasurer): ShapeSpec {
   }
   const children = [...backgrounds, ...fragments];
   const opacity = p.opacity ?? 1;
-  // 显式溢出策略：有 scrollY 滚动视口或非 visible 截断时裁剪到文本框；visible 且无滚动时完全不裁切
-  const overflow = p.style.overflow ?? p.style.textOverflow ?? 'visible';
-  const needClip =
-    p.height !== undefined && (p.scrollY !== undefined || (overflow !== 'visible' && overflow !== 'none'));
-  if (!needClip) {
+  // 编辑时在框内滚动，或声明了截断 (clip / ellipsis) 的固定高度文字：裁剪到文本框；其余照常显示
+  const clips = p.height !== undefined && (p.scrollY !== undefined || (p.style.textOverflow ?? 'none') !== 'none');
+  if (!clips) {
     return { Shape: Group, props: { x: p.x, y: p.y, rotation: 0, opacity }, children };
   }
-  // 固定高度溢出截断或编辑时超出文本框滚动：裁剪到文本框
-  const scrollY = p.scrollY ?? 0;
   return {
     Shape: Box,
     props: {
@@ -268,7 +264,7 @@ function describeText(p: TextPrimitive, fonts: FontMeasurer): ShapeSpec {
       overflow: 'hide',
       opacity
     },
-    children: [{ Shape: Group, props: { x: 0, y: -scrollY, rotation: 0, opacity: 1 }, children }]
+    children: [{ Shape: Group, props: { x: 0, y: -(p.scrollY ?? 0), rotation: 0, opacity: 1 }, children }]
   };
 }
 

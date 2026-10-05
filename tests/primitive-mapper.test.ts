@@ -142,7 +142,7 @@ describe('Primitive Mapper', () => {
     expect(shape).toBeInstanceOf(Group);
   });
 
-  it('显式声明 overflow: visible 时保持 Group，显式 overflow: hidden 时进入裁剪 Box', () => {
+  it('固定高度文字：textOverflow 为 none 时照常显示 (Group)，声明截断时裁剪到文本框 (Box)', () => {
     const visibleShape = createLeaferShape({
       kind: 'text',
       x: 0,
@@ -150,7 +150,7 @@ describe('Primitive Mapper', () => {
       width: 100,
       height: 20,
       runs: [{ text: '溢出文字' }],
-      style: { overflow: 'visible' }
+      style: { textOverflow: 'none' }
     });
     expect(visibleShape).toBeInstanceOf(Group);
 
@@ -161,7 +161,7 @@ describe('Primitive Mapper', () => {
       width: 100,
       height: 20,
       runs: [{ text: '溢出文字' }],
-      style: { overflow: 'hidden' }
+      style: { textOverflow: 'clip' }
     }) as InstanceType<typeof Box>;
     expect(hiddenShape).toBeInstanceOf(Box);
     expect(hiddenShape.overflow).toBe('hide');

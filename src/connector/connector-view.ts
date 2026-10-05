@@ -98,7 +98,6 @@ export class ConnectorView {
       stroke: paint.color,
       strokeWidth: paint.width,
       dashPattern: style?.strokeDashArray,
-      strokeDashArray: style?.strokeDashArray,
       strokeCap: toLeaferStrokeCap(style?.strokeCap),
       strokeJoin: style?.strokeJoin,
       cornerRadius: style?.cornerRadius
