@@ -32,6 +32,12 @@ if (typeof (globalThis as any).HTMLElement === 'undefined') {
     hasAttribute() {
       return false;
     }
+    contains(element: unknown) {
+      return element === this;
+    }
+    get ownerDocument() {
+      return (globalThis as any).document;
+    }
     focus() {}
   };
 }
@@ -60,7 +66,10 @@ if (typeof (globalThis as any).document === 'undefined') {
       const el = new (globalThis as any).HTMLElement();
       return el;
     },
-    body: { appendChild: () => {}, removeChild: () => {} }
+    body: { appendChild: () => {}, removeChild: () => {} },
+    activeElement: null,
+    addEventListener: () => {},
+    removeEventListener: () => {}
   };
 }
 if (typeof (globalThis as any).Image === 'undefined') {

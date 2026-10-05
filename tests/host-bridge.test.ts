@@ -5,8 +5,19 @@ import type { CanvasPointerEvent, NodeEntity } from '@skynote/core';
 import { TEXT_INPUT_ATTRIBUTE } from '../src/bridge/dom-text-input';
 import { DOMHostBridge } from '../src/bridge/host-bridge';
 
+/** 最小化文档替身：记录剪贴板事件监听与当前焦点 */
+class FakeDocument {
+  activeElement: unknown = null;
+  readonly listeners = new Map<string, (e: unknown) => void>();
+
+  addEventListener(type: string, handler: (e: unknown) => void): void {
+    this.listeners.set(type, handler);
+  }
+}
+
 /** 最小化容器替身：记录监听函数与 getBoundingClientRect 调用次数 */
 class FakeContainer {
+  readonly ownerDocument = new FakeDocument();
   rectCalls = 0;
   focusCalls = 0;
   tabIndex = -1;
@@ -15,6 +26,10 @@ class FakeContainer {
 
   hasAttribute(): boolean {
     return false;
+  }
+
+  contains(element: unknown): boolean {
+    return element === this;
   }
 
   focus(): void {
@@ -237,6 +252,72 @@ describe('DOMHostBridge 按帧合并输入', () => {
 
     bridge.setCursor('default');
     expect(container.style.cursor).toBe('default');
+    bridge.destroy();
+  });
+});
+
+describe('DOMHostBridge 剪贴板', () => {
+  function setup() {
+    const engine = new SkyNoteEngine();
+    const container = new FakeContainer();
+    const bridge = new DOMHostBridge({
+      container: container as unknown as HTMLElement,
+      engine,
+      overlay: DETACHED_CANVAS_HOST.overlay,
+      onInteractionChange: () => {},
+      requestFrame: () => {}
+    });
+    const doc = container.ownerDocument;
+    /** 以系统剪贴板替身触发事件，返回写入的数据与是否阻止了默认行为 */
+    const fire = (type: string, incoming: Record<string, string> = {}) => {
+      const written: Record<string, string> = {};
+      let prevented = false;
+      doc.listeners.get(type)!({
+        type,
+        defaultPrevented: false,
+        clipboardData: {
+          types: Object.keys(incoming),
+          getData: (format: string) => incoming[format] ?? '',
+          setData: (format: string, value: string) => {
+            written[format] = value;
+          }
+        },
+        preventDefault: () => {
+          prevented = true;
+        }
+      });
+      return { written, prevented };
+    };
+    return { engine, container, doc, bridge, fire };
+  }
+
+  it('画布持有焦点时复制、粘贴交给内核并阻止默认行为；内核不处理或焦点不在画布时保留默认行为', () => {
+    const { engine, container, doc, bridge, fire } = setup();
+    const pasted: unknown[] = [];
+    engine.clipboard.register({ copy: () => ({ 'text/plain': '节点文字' }), paste: (data) => pasted.push(data) > 0 });
+
+    doc.activeElement = null;
+    expect(fire('copy').prevented).toBe(false);
+
+    doc.activeElement = container;
+    expect(fire('copy')).toEqual({ written: { 'text/plain': '节点文字' }, prevented: true });
+    expect(fire('paste', { 'text/plain': '外部' }).prevented).toBe(true);
+    expect(pasted).toEqual([{ 'text/plain': '外部' }]);
+    // 剪切没有处理者响应：保留默认行为
+    expect(fire('cut').prevented).toBe(false);
+    bridge.destroy();
+  });
+
+  it('指针离开画布时先冲刷待合并的移动，再分发离开事件', () => {
+    const { engine, container, bridge } = setup();
+    const events: string[] = [];
+    engine.pointer.register('probe', {
+      onPointerMove: () => events.push('move'),
+      onPointerLeave: () => events.push('leave')
+    });
+    container.fire('pointermove', { clientX: 50, clientY: 50 });
+    container.fire('pointerleave', { clientX: 60, clientY: 50 });
+    expect(events).toEqual(['move', 'leave']);
     bridge.destroy();
   });
 });

@@ -196,9 +196,13 @@ export class DOMHostBridge implements CanvasHost {
     this.container.addEventListener('pointermove', this.handlePointerMove, { signal });
     this.container.addEventListener('pointerup', this.handlePointerUp, { signal });
     this.container.addEventListener('pointercancel', this.handlePointerCancel, { signal });
+    this.container.addEventListener('pointerleave', this.handlePointerLeave, { signal });
     this.container.addEventListener('wheel', this.handleWheel, { signal, passive: false });
     this.container.addEventListener('keydown', this.handleKeyDown, { signal });
     this.container.addEventListener('keyup', this.handleKeyUp, { signal });
+    // 焦点在不可编辑的画布容器上时，复制事件的目标随浏览器而异 (容器或 body)：在文档上监听，再按焦点判断
+    const doc = this.container.ownerDocument;
+    for (const type of ['copy', 'cut', 'paste'] as const) doc.addEventListener(type, this.handleClipboard, { signal });
     // 容器默认不可聚焦，补齐 tabindex 才能接收键盘事件；宿主已显式设置时尊重其配置
     if (!this.container.hasAttribute('tabindex')) {
       this.container.tabIndex = 0;
@@ -277,6 +281,11 @@ export class DOMHostBridge implements CanvasHost {
     this.engine.pointer.dispatchPointerCancel(this.toCanvasPointerEvent(e));
   };
 
+  private handlePointerLeave = (e: PointerEvent): void => {
+    this.flushPointerMove(e.pointerId);
+    this.engine.pointer.dispatchPointerLeave(this.toCanvasPointerEvent(e));
+  };
+
   private toCanvasKeyboardEvent(e: KeyboardEvent): CanvasKeyboardEvent {
     return {
       key: e.key,
@@ -295,6 +304,29 @@ export class DOMHostBridge implements CanvasHost {
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (isEditableTarget(e.target)) return;
     this.engine.inputScopes.dispatchKeyDown(this.toCanvasKeyboardEvent(e));
+  };
+
+  /**
+   * 画布持有焦点 (且不在任何输入框中) 时，复制、剪切、粘贴交给内核；内核没有处理时保留浏览器默认行为
+   * 画布内文字编辑的隐藏输入框自己处理剪贴板，这里跳过
+   */
+  private handleClipboard = (e: ClipboardEvent): void => {
+    const active = this.container.ownerDocument.activeElement;
+    if (e.defaultPrevented || !e.clipboardData || !this.container.contains(active)) return;
+    if (isEditableTarget(active) || active?.hasAttribute(TEXT_INPUT_ATTRIBUTE)) return;
+    const { clipboard } = this.engine;
+    if (e.type === 'paste') {
+      const data: Record<string, string> = {};
+      for (const type of e.clipboardData.types) {
+        if (type !== 'Files') data[type] = e.clipboardData.getData(type);
+      }
+      if (clipboard.paste(data)) e.preventDefault();
+      return;
+    }
+    const data = e.type === 'cut' ? clipboard.cut() : clipboard.copy();
+    if (!data) return;
+    for (const [type, value] of Object.entries(data)) e.clipboardData.setData(type, value);
+    e.preventDefault();
   };
 
   private handleBlur = (): void => {
