@@ -129,6 +129,44 @@ describe('Primitive Mapper', () => {
     expect((content.children[0] as TextShape).text).toBe('a');
   });
 
+  it('单行不折行文字在编辑态 (textOverflow: none) 溢出时不进裁剪盒，保持 Group 完整可见', () => {
+    const shape = createLeaferShape({
+      kind: 'text',
+      x: 0,
+      y: -20,
+      width: 100,
+      height: 20,
+      runs: [{ text: '超出画框宽度的很长很长标题' }],
+      style: { fontSize: 12, textWrap: 'none', textOverflow: 'none' }
+    });
+    expect(shape).toBeInstanceOf(Group);
+  });
+
+  it('显式声明 overflow: visible 时保持 Group，显式 overflow: hidden 时进入裁剪 Box', () => {
+    const visibleShape = createLeaferShape({
+      kind: 'text',
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 20,
+      runs: [{ text: '溢出文字' }],
+      style: { overflow: 'visible' }
+    });
+    expect(visibleShape).toBeInstanceOf(Group);
+
+    const hiddenShape = createLeaferShape({
+      kind: 'text',
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 20,
+      runs: [{ text: '溢出文字' }],
+      style: { overflow: 'hidden' }
+    }) as InstanceType<typeof Box>;
+    expect(hiddenShape).toBeInstanceOf(Box);
+    expect(hiddenShape.overflow).toBe('hide');
+  });
+
   it('排版框宽或高为 0 时没有放文字的空间，不绘制任何片段；框恢复后重新绘制', () => {
     const base: CanvasPrimitive = { kind: 'text', x: 0, y: 0, runs: [{ text: '很长的一段文字' }], style: {}, width: 0 };
     const group = createLeaferShape(base) as InstanceType<typeof Group>;
@@ -261,5 +299,32 @@ describe('Primitive Mapper', () => {
     const box = new Box();
     expect(updateLeaferShape(box, { kind: 'group', children: [] })).toBe(false);
     expect(updateLeaferShape(new Group(), { kind: 'group', children: [] })).toBe(true);
+  });
+
+  it('文字由多分段合并为单分段时，多余的旧图元彻底删除无残留 (杜绝文字重叠残影)', () => {
+    // 模拟输入法组合状态：有 3 个文字片段 (前缀、拼音、后缀)
+    const textGroup = createLeaferShape({
+      kind: 'text',
+      x: 0,
+      y: 0,
+      runs: [{ text: '文' }, { text: "s's'd'd's", textDecoration: ['underline'] }, { text: '本' }],
+      style: { fontSize: 16 }
+    }) as InstanceType<typeof Group>;
+
+    expect(textGroup.children.length).toBe(3);
+
+    // 模拟确认输入法后：合并为 1 个连续文本片段
+    const updated = updateLeaferShape(textGroup, {
+      kind: 'text',
+      x: 0,
+      y: 0,
+      runs: [{ text: '文实打实大苏打杀杀杀杀杀闪烁本' }],
+      style: { fontSize: 16 }
+    });
+
+    expect(updated).toBe(true);
+    // 必须只剩下 1 个图元，旧的拼音与旧的“本”字必须全部被 remove，绝无残留
+    expect(textGroup.children.length).toBe(1);
+    expect((textGroup.children[0] as TextShape).text).toBe('文实打实大苏打杀杀杀杀杀闪烁本');
   });
 });

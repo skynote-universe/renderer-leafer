@@ -179,6 +179,7 @@ export class NodeView {
               fill: resolveNodeFill(node.style?.fill, theme, theme.nodeFill),
               stroke: resolveThemeColor(node.style?.stroke, theme, theme.nodeStroke),
               strokeWidth: node.style?.strokeWidth ?? 1,
+              strokeDashArray: node.style?.strokeDashArray,
               radius: node.style?.radius
             }
           ];

@@ -52,6 +52,24 @@ interface PendingWheel {
 /** 滚轮位移统一为像素：Firefox 等以行或页为单位上报 */
 const WHEEL_LINE_HEIGHT = 16;
 
+/** 旋转光标缓存字典：记录各角度生成的 SVG Data URI */
+const ROTATE_CURSOR_CACHE: Record<number, string> = {};
+
+/**
+ * 生成或复用指定角度的单弧双向旋转光标 (一段清晰舒展的大圆弧 + 两端利落的切向实心箭头，32x32 规范)
+ */
+function getRotateCursor(angle: number): string {
+  const norm = (((Math.round(angle / 45) * 45) % 360) + 360) % 360;
+  if (!ROTATE_CURSOR_CACHE[norm]) {
+    const arc = 'M14.5 6.5A13.5 13.5 0 0 0 14.5 25.5';
+    const arrowTop = '17.5,3.5 12.4,4.4 16.6,8.6';
+    const arrowBottom = '17.5,28.5 16.6,23.4 12.4,27.6';
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none"><g transform="rotate(${norm} 16 16)"><path d="${arc}" stroke="white" stroke-width="4" stroke-linecap="round"/><polygon points="${arrowTop}" fill="white" stroke="white" stroke-width="2" stroke-linejoin="round"/><polygon points="${arrowBottom}" fill="white" stroke="white" stroke-width="2" stroke-linejoin="round"/><path d="${arc}" stroke="#18181b" stroke-width="1.75" stroke-linecap="round"/><polygon points="${arrowTop}" fill="#18181b"/><polygon points="${arrowBottom}" fill="#18181b"/></g></svg>`;
+    ROTATE_CURSOR_CACHE[norm] = `url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16, crosshair`;
+  }
+  return ROTATE_CURSOR_CACHE[norm];
+}
+
 export interface HostBridgeOptions {
   container: HTMLElement;
   engine: SkyNoteEngine;
@@ -90,7 +108,12 @@ export class DOMHostBridge implements CanvasHost {
   }
 
   setCursor(cursor: SystemCursor): void {
-    this.container.style.cursor = cursor;
+    if (cursor === 'rotate' || cursor.startsWith('rotate-')) {
+      const angle = cursor === 'rotate' ? 0 : Number.parseInt(cursor.slice(7), 10) || 0;
+      this.container.style.cursor = getRotateCursor(angle);
+    } else {
+      this.container.style.cursor = cursor;
+    }
   }
 
   capturePointer(pointerId: number): void {

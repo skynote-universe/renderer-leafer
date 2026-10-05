@@ -225,4 +225,18 @@ describe('DOMHostBridge 按帧合并输入', () => {
     expect(wheels[1].zoom).toBeCloseTo(0.2);
     bridge.destroy();
   });
+
+  it('setCursor: rotate 与 rotate-xxx 会映射为 SVG Data URI 形式的单弧旋转光标', () => {
+    const { container, bridge } = setup();
+    bridge.setCursor('rotate');
+    expect(container.style.cursor).toContain('data:image/svg+xml');
+    expect(container.style.cursor).toContain('16 16, crosshair');
+
+    bridge.setCursor('rotate-45');
+    expect(decodeURIComponent(container.style.cursor)).toContain('rotate(45 16 16)');
+
+    bridge.setCursor('default');
+    expect(container.style.cursor).toBe('default');
+    bridge.destroy();
+  });
 });

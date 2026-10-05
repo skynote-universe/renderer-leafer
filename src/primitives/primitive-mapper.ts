@@ -68,6 +68,7 @@ function strokeProps(p: StrokeFields): IUIInputData {
   return {
     stroke: p.stroke,
     strokeWidth: p.strokeWidth,
+    dashPattern: p.strokeDashArray,
     strokeDashArray: p.strokeDashArray,
     strokeCap: toLeaferStrokeCap(p.strokeCap),
     strokeJoin: p.strokeJoin,
@@ -247,22 +248,27 @@ function describeText(p: TextPrimitive, fonts: FontMeasurer): ShapeSpec {
   }
   const children = [...backgrounds, ...fragments];
   const opacity = p.opacity ?? 1;
-  if (p.scrollY === undefined || p.height === undefined) {
+  // 显式溢出策略：有 scrollY 滚动视口或非 visible 截断时裁剪到文本框；visible 且无滚动时完全不裁切
+  const overflow = p.style.overflow ?? p.style.textOverflow ?? 'visible';
+  const needClip =
+    p.height !== undefined && (p.scrollY !== undefined || (overflow !== 'visible' && overflow !== 'none'));
+  if (!needClip) {
     return { Shape: Group, props: { x: p.x, y: p.y, rotation: 0, opacity }, children };
   }
-  // 画布内编辑且文字超出文本框：裁剪到文本框，内容上移 scrollY
+  // 固定高度溢出截断或编辑时超出文本框滚动：裁剪到文本框
+  const scrollY = p.scrollY ?? 0;
   return {
     Shape: Box,
     props: {
       x: p.x,
       y: p.y,
       width: p.width ?? layout.width,
-      height: p.height,
+      height: p.height!,
       rotation: 0,
       overflow: 'hide',
       opacity
     },
-    children: [{ Shape: Group, props: { x: 0, y: -p.scrollY, rotation: 0, opacity: 1 }, children }]
+    children: [{ Shape: Group, props: { x: 0, y: -scrollY, rotation: 0, opacity: 1 }, children }]
   };
 }
 
@@ -284,9 +290,11 @@ function apply(shape: LeaferShape, spec: ShapeSpec): boolean {
 }
 
 function reconcile(parent: Group, existing: readonly LeaferShape[], specs: readonly ShapeSpec[]): LeaferShape[] {
+  // 浅拷贝快照：避免遍历与就地 remove/addAt 时受底层 children 数组动态变化的影响 (防跳项漏删)
+  const oldShapes = [...existing];
   const result: LeaferShape[] = [];
   for (let i = 0; i < specs.length; i++) {
-    const shape = existing[i];
+    const shape = oldShapes[i];
     if (shape && apply(shape, specs[i])) {
       result.push(shape);
       continue;
@@ -296,7 +304,9 @@ function reconcile(parent: Group, existing: readonly LeaferShape[], specs: reado
     parent.addAt(created, i);
     result.push(created);
   }
-  for (let i = specs.length; i < existing.length; i++) existing[i].remove();
+  for (let i = specs.length; i < oldShapes.length; i++) {
+    oldShapes[i]?.remove();
+  }
   return result;
 }
 
