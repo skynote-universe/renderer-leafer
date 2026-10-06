@@ -104,7 +104,7 @@ export class LeaferRenderer implements CanvasRenderer {
       mapper,
       offscreenCacheLimit
     });
-    this.connectorLayer = new ConnectorLayer({ engine, offscreenCacheLimit });
+    this.connectorLayer = new ConnectorLayer({ engine, mapper, offscreenCacheLimit });
     this.contentOrder = new ContentOrderSync(this.nodeLayer, this.connectorLayer, engine.entityStore);
     this.bridge = new DOMHostBridge({
       container,
@@ -257,6 +257,7 @@ export class LeaferRenderer implements CanvasRenderer {
       visibleConnectorIds,
       (id) => frame.committedConnectorIds.has(id),
       session.theme,
+      session.textEditing,
       (containerId) => (containerId === undefined ? this.contentLayer : nodeLayer.getChildrenContainer(containerId)!)
     );
     // 以实测挂载成本校准分帧调度器：慢设备自动缩小每帧提交量，快设备减少不必要的分帧

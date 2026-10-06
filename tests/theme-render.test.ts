@@ -84,13 +84,74 @@ describe('LeaferRenderer 主题驱动配色', () => {
 
     const renderer = mountRenderer(engine);
     const connectorGroup = renderer.contentLayer.children.find(
-      (child) => (child as unknown as { children: unknown[] }).children.length === 2
+      (child) => (child as unknown as { children: unknown[] }).children.length === 3
     ) as unknown as {
       children: Record<string, unknown>[];
     };
-    const [line, marker] = connectorGroup.children;
+    // 折线、文字层、箭头
+    const [line, , marker] = connectorGroup.children;
     expect(line.stroke).toBe(engine.session.theme.connectorStroke);
     expect(marker.fill).toBe(DARK_CANVAS_THEME_SEED.background);
+    renderer.destroy();
+  });
+
+  it('只改箭头 (路由不变) 时同样重画：渲染按连线实体版本判断，而不只看路由对象', () => {
+    const engine = new SkyNoteEngine();
+    engine.documentStore.addNode(makeNode('a', 0));
+    engine.documentStore.addNode(makeNode('b', 300));
+    const connector: ConnectorEntity = {
+      id: 'c1',
+      type: 'connector',
+      connectorType: 'straight',
+      from: { nodeId: 'a' },
+      to: { nodeId: 'b' },
+      zIndex: 'a0',
+      locked: false,
+      style: { endArrow: 'standard:arrow' }
+    };
+    engine.documentStore.commit({ patches: [{ op: 'set', path: ['content', 'connectors', 'c1'], value: connector }] });
+    const renderer = mountRenderer(engine);
+    const markerPath = () => {
+      const group = renderer.contentLayer.children.find(
+        (child) => (child as unknown as { children: unknown[] }).children.length === 3
+      ) as unknown as { children: Record<string, unknown>[] };
+      return group.children[2].path;
+    };
+    const route = engine.getConnectorRoute('c1');
+    expect(markerPath()).toBe(engine.arrowMarkers.get('standard:arrow')!.d);
+
+    engine.documentStore.updateConnector('c1', { style: { endArrow: 'standard:diamond' } });
+    expect(engine.getConnectorRoute('c1')).toBe(route);
+    renderer.renderFrame();
+    expect(markerPath()).toBe(engine.arrowMarkers.get('standard:diamond')!.d);
+    renderer.destroy();
+  });
+  it('线宽为 0 的连线不画线，但线上有文字时文字照常显示', () => {
+    const engine = new SkyNoteEngine({
+      fonts: { measureWidth: (text: string, font: { size: number }) => [...text].length * font.size }
+    });
+    engine.documentStore.addNode(makeNode('a', 0));
+    engine.documentStore.addNode(makeNode('b', 300));
+    const connector = (id: string, withText: boolean): ConnectorEntity => ({
+      id,
+      type: 'connector',
+      connectorType: 'straight',
+      from: { nodeId: 'a' },
+      to: { nodeId: 'b' },
+      zIndex: 'a0',
+      locked: false,
+      style: { strokeWidth: 0 },
+      ...(withText && { textBlocks: [{ id: 't', position: 0.5, runs: [{ text: '是' }] }] })
+    });
+    engine.documentStore.commit({
+      patches: [
+        { op: 'set', path: ['content', 'connectors', 'bare'], value: connector('bare', false) },
+        { op: 'set', path: ['content', 'connectors', 'labeled'], value: connector('labeled', true) }
+      ]
+    });
+    const renderer = mountRenderer(engine);
+    // 两个节点 + 带文字的那条连线
+    expect(renderer.contentLayer.children).toHaveLength(3);
     renderer.destroy();
   });
 });

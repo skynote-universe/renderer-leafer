@@ -78,7 +78,7 @@ describe('旋转约定在渲染层的落地', () => {
     });
     const renderer = mount(engine);
     // 拖出容器：子节点局部坐标远超容器外框
-    engine.documentStore.moveNodes(['c'], { x: 400, y: 300 });
+    engine.documentStore.moveEntities({ nodeIds: ['c'] }, { x: 400, y: 300 });
     renderer.renderFrame();
 
     const groupOf = (id: string) =>

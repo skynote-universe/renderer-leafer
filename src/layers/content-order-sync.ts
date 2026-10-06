@@ -130,8 +130,8 @@ export class ContentOrderSync {
       const group = this.connectorLayer.getGroup(connectorId);
       const connector = this.entityStore.getConnector(connectorId)?.entity;
       if (!group || !connector || exclude?.has(group)) continue;
-      const { anchorNode, placement } = this.connectorLayer.getPlacement(connectorId)!;
-      push({ kind: 'connector', connector, group, anchorNode, placement });
+      const { anchorNode } = this.connectorLayer.getPlacement(connectorId)!;
+      push({ kind: 'connector', connector, group, anchorNode });
     }
     return buckets;
   }

@@ -10,14 +10,18 @@
  */
 
 import type { Group } from 'leafer';
-import type { SkyNoteEngine, CanvasTheme, NodeEntity } from '@skynote/core';
+import type { SkyNoteEngine, CanvasTheme, NodeEntity, TextEditingTarget } from '@skynote/core';
+import { resolveConnectorLayerPlacement, resolveConnectorStyle, type ConnectorLayerPlacement } from '@skynote/core';
 import type { LayerSyncResult } from '../types';
 import { ConnectorView } from '../connector/connector-view';
-import { resolveConnectorLayerPlacement, type ConnectorLayerPlacement } from '../layering/content-layer-order';
+import type { PrimitiveMapper } from '../primitives/primitive-mapper';
+
 import { VisibilityTracker } from './visibility-tracker';
 
 export interface ConnectorLayerOptions {
   engine: SkyNoteEngine;
+  /** 连线文字与节点文字共用同一个映射器 (同一套文字测量) */
+  mapper: PrimitiveMapper;
   offscreenCacheLimit: number;
 }
 
@@ -74,6 +78,7 @@ export class ConnectorLayer {
     visibleIds: readonly string[],
     isCommitted: (id: string) => boolean,
     theme: CanvasTheme,
+    textEditing: TextEditingTarget | null,
     resolveContainer: (containerId: string | undefined) => Group
   ): LayerSyncResult {
     const { engine } = this.options;
@@ -85,9 +90,10 @@ export class ConnectorLayer {
       const connectorId = visibleIds[i];
       if (!isCommitted(connectorId)) continue;
       const runtimeConnector = engine.entityStore.getConnector(connectorId);
-      if (!runtimeConnector || runtimeConnector.entity.style?.strokeWidth === 0) continue;
+      if (!runtimeConnector) continue;
       const route = engine.getConnectorRoute(connectorId);
-      if (!route) continue;
+      // 线宽为 0 的连线不画线，但线上的文字照常显示
+      if (!route || (runtimeConnector.entity.style?.strokeWidth === 0 && route.labels.length === 0)) continue;
 
       const entering = !shown.has(connectorId);
       const start = entering ? performance.now() : 0;
@@ -95,15 +101,17 @@ export class ConnectorLayer {
       const container = resolveContainer(containerId);
       let view = this.views.get(connectorId);
       if (!view) {
-        view = new ConnectorView();
+        view = new ConnectorView(this.options.mapper);
         this.views.set(connectorId, view);
       }
       view.update({
-        connector: runtimeConnector.entity,
+        style: resolveConnectorStyle(runtimeConnector.entity, engine.routers),
         route,
-        dataVersion: runtimeConnector.runtime.dataVersion,
+        version: `${runtimeConnector.runtime.geomVersion}:${runtimeConnector.runtime.dataVersion}`,
         arrowMarkers: engine.arrowMarkers,
-        theme
+        theme,
+        editing: textEditing?.kind === 'connector' && textEditing.id === connectorId ? textEditing : null,
+        fonts: engine.documentStore.fonts
       });
       if (view.group.parent !== container) container.add(view.group);
       view.setContainerTransform(containerId === undefined ? null : engine.entityStore.getWorldTransform(containerId)!);

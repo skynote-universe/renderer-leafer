@@ -75,7 +75,7 @@ describe('嵌套渲染 (ADR-114)', () => {
 
     // 移动容器：只有容器图元变化，子节点自身的变换不变，随容器移动且与内核一致
     const before = { x: cardGroup.x, y: cardGroup.y };
-    store.moveNodes(['frame'], { x: 50, y: -20 });
+    store.moveEntities({ nodeIds: ['frame'] }, { x: 50, y: -20 });
     renderer.renderFrame();
     expect({ x: cardGroup.x, y: cardGroup.y }).toEqual(before);
     expectBoundsClose(sceneBounds(renderer, cardGroup), engine.getNodeWorldBounds('card')!);
@@ -132,8 +132,8 @@ describe('嵌套渲染 (ADR-114)', () => {
     const inner = connectorLayer.getGroup('inner')!;
     const frameChildren = nodeLayer.getChildrenContainer('frame')!;
     expect(inner.parent).toBe(frameChildren);
-    // 容器内：连线紧贴较高端点 c 下方
-    expect(frameChildren.children).toEqual([nodeLayer.getGroup('b'), inner, nodeLayer.getGroup('c')]);
+    // 容器内：连线紧贴较高端点 c 上方，箭头不被节点盖住
+    expect(frameChildren.children).toEqual([nodeLayer.getGroup('b'), nodeLayer.getGroup('c'), inner]);
 
     const cross = connectorLayer.getGroup('cross')!;
     expect(contentLayer.children).toEqual([nodeLayer.getGroup('outside'), nodeLayer.getGroup('frame'), cross]);
@@ -142,7 +142,7 @@ describe('嵌套渲染 (ADR-114)', () => {
     expectBoundsClose(sceneBounds(renderer, inner), engine.getConnectorRoute('inner')!.bounds);
     expectBoundsClose(sceneBounds(renderer, cross), engine.getConnectorRoute('cross')!.bounds);
 
-    store.moveNodes(['frame'], { x: 40 });
+    store.moveEntities({ nodeIds: ['frame'] }, { x: 40 });
     store.updateNode('frame', { rotation: 45 });
     renderer.renderFrame();
     expectBoundsClose(sceneBounds(renderer, inner), engine.getConnectorRoute('inner')!.bounds);

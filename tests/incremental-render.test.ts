@@ -38,7 +38,7 @@ describe('LeaferRenderer 增量渲染', () => {
     const renderSpy = vi.spyOn(renderer, 'renderFrame');
 
     for (let i = 0; i < 10; i++) {
-      engine.documentStore.moveNodes(['a'], { x: 1 }, { groupId: 'drag' });
+      engine.documentStore.moveEntities({ nodeIds: ['a'] }, { x: 1 }, { groupId: 'drag' });
     }
     expect(renderSpy).not.toHaveBeenCalled();
 
@@ -76,7 +76,7 @@ describe('LeaferRenderer 增量渲染', () => {
     const contentLayer = renderer.contentLayer;
     const originalGroup = contentLayer.children[0];
 
-    engine.documentStore.removeNodes(['a']);
+    engine.documentStore.removeEntities({ nodeIds: ['a'] });
     renderer.renderFrame();
     expect(contentLayer.children.length).toBe(0);
 
@@ -199,8 +199,8 @@ describe('LeaferRenderer 增量渲染', () => {
     engine.routers.register({
       id: 'detour',
       label: '绕行',
-      route: ({ startPoint, endPoint }) => ({
-        points: [startPoint, { x: startPoint.x, y: 5000 }, { x: endPoint.x, y: 5000 }, endPoint]
+      route: ({ start, end }) => ({
+        points: [start.point, { x: start.point.x, y: 5000 }, { x: end.point.x, y: 5000 }, end.point]
       })
     });
     renderer.renderFrame();
@@ -226,7 +226,7 @@ describe('LeaferRenderer 增量渲染', () => {
     expect(rect().width).toBe(120);
 
     const before = rect();
-    engine.documentStore.moveNodes(['a'], { x: 30 });
+    engine.documentStore.moveEntities({ nodeIds: ['a'] }, { x: 30 });
     renderer.renderFrame();
     expect(outer().x).toBe(30);
     expect(rect()).toBe(before);

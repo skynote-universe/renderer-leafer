@@ -105,7 +105,8 @@ export class NodeView {
     // 已崩溃降级的节点视同占位档位，只在数据、尺寸或主题变化时重试
     const renderedDetail = this.detail === 'broken' ? detail : this.detail;
     const sizeChanged = node.width !== this.contentWidth || node.height !== this.contentHeight;
-    const editing = context.textEditing?.nodeId === node.id ? context.textEditing : null;
+    const target = context.textEditing;
+    const editing = target?.kind === 'node' && target.id === node.id ? target : null;
     if (
       versions.dataVersion === this.dataVersion &&
       !sizeChanged &&

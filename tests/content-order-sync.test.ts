@@ -68,8 +68,7 @@ function expectContainersMatch(engine: SkyNoteEngine, renderer: LeaferRenderer, 
       kind: 'connector',
       connector: engine.entityStore.getConnector(id)!.entity as ConnectorEntity,
       group: connectorLayer.getGroup(id)!,
-      anchorNode: placement.anchorNode,
-      placement: placement.placement
+      anchorNode: placement.anchorNode
     });
   }
   for (const [container, entries] of expected) {
@@ -149,7 +148,7 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
       } else if (roll < 0.7) {
         addRandomConnector();
       } else if (roll < 0.8) {
-        store.removeNodes([pickFrom(ids)]);
+        store.removeEntities({ nodeIds: [pickFrom(ids)] });
       } else if (roll < 0.9) {
         // 改挂到随机容器或移出到根层级 (会成环的改挂被提交守卫拒绝)
         const target = random() < 0.25 ? undefined : pickFrom(ids);
@@ -158,7 +157,7 @@ describe('ContentOrderSync 按容器增量层级同步 (ADR-114)', () => {
         store.reparentNodes([pickFrom(ids)], target);
         console.error = originalError;
       } else {
-        store.moveNodes([pickFrom(ids)], { x: Math.floor(random() * 200) - 100 });
+        store.moveEntities({ nodeIds: [pickFrom(ids)] }, { x: Math.floor(random() * 200) - 100 });
       }
       renderer.renderFrame();
 

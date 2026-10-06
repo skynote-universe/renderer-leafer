@@ -155,7 +155,7 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     expect(renderer.contentLayer.children.length).toBe(2);
     expect(errorSpy).toHaveBeenCalledTimes(1);
 
-    engine.documentStore.moveNodes(['good'], { x: 1 });
+    engine.documentStore.moveEntities({ nodeIds: ['good'] }, { x: 1 });
     renderer.renderFrame();
     renderer.renderFrame();
     expect(errorSpy).toHaveBeenCalledTimes(1);
