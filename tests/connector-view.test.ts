@@ -7,6 +7,7 @@ import {
   LIGHT_CANVAS_THEME_SEED,
   computeConnectorRoute,
   computeNodeLocalMatrix,
+  resolveNodeAnchors,
   resolveNodeOutline
 } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
@@ -16,13 +17,18 @@ const TEST_THEME = deriveCanvasTheme({ seed: LIGHT_CANVAS_THEME_SEED });
 
 /** 路由由内核引擎求解，渲染器只负责绘制：测试中直接调用同一纯函数构造路由 */
 function routeOf(connector: ConnectorEntity, nodes: Record<string, NodeEntity> = {}, withFonts = false) {
-  const resolveNode = (id: string) =>
-    nodes[id] && {
-      node: nodes[id],
-      worldMatrix: computeNodeLocalMatrix(nodes[id]),
-      outline: resolveNodeOutline(nodes[id], undefined),
+  const resolveNode = (id: string) => {
+    const node = nodes[id];
+    if (!node) return undefined;
+    const outline = resolveNodeOutline(node, undefined);
+    return {
+      node,
+      worldMatrix: computeNodeLocalMatrix(node),
+      outline,
+      anchors: resolveNodeAnchors(node, undefined, outline),
       strokeWidth: 0
     };
+  };
   return computeConnectorRoute(connector, resolveNode, new ConnectorRouterRegistry(), withFonts ? fonts : null)!;
 }
 
