@@ -241,17 +241,36 @@ describe('DOMHostBridge 按帧合并输入', () => {
     bridge.destroy();
   });
 
-  it('setCursor: 旋转光标按角度生成 SVG (按 15° 取整)，系统光标原样写入', () => {
-    const { container, bridge } = setup();
-    bridge.setCursor({ kind: 'rotate', angle: 0 });
+  it('setCursor: 光标全部取自注册表的自绘 SVG，带角度的按 5° 取整；未注册的名称当作 CSS 关键字', () => {
+    const { container, bridge, engine } = setup();
+    const svgOf = () => decodeURIComponent(container.style.cursor);
+
+    // 挂载即为自绘的默认光标
     expect(container.style.cursor).toContain('data:image/svg+xml');
-    expect(container.style.cursor).toContain('16 16, crosshair');
+    expect(container.style.cursor).toContain('6 5, default');
 
     bridge.setCursor({ kind: 'rotate', angle: -134 });
-    expect(decodeURIComponent(container.style.cursor)).toContain('rotate(225 16 16)');
+    expect(svgOf()).toContain('rotate(225 16 16)');
+    expect(container.style.cursor).toContain('16 16, crosshair');
+    bridge.setCursor({ kind: 'resize', angle: 37 });
+    expect(svgOf()).toContain('rotate(35 16 16)');
 
-    bridge.setCursor('default');
-    expect(container.style.cursor).toBe('default');
+    bridge.setCursor('pointer');
+    expect(container.style.cursor).toBe('pointer');
+
+    // 统一配色与覆盖：注册表变化后当前光标立即刷新；恢复后回到内置
+    bridge.setCursor('move');
+    engine.cursors.setStyle({ ink: 'navy' });
+    expect(svgOf()).toContain('fill="navy"');
+    const restore = engine.cursors.register({
+      id: 'move',
+      svg: '<circle cx="16" cy="16" r="6" fill="{ink}"/>',
+      hotspot: { x: 16, y: 16 },
+      fallback: 'move'
+    });
+    expect(svgOf()).toContain('<circle');
+    restore();
+    expect(svgOf()).not.toContain('<circle');
     bridge.destroy();
   });
 });

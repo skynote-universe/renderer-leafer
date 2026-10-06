@@ -14,6 +14,8 @@
  * 6. 按帧合并高频输入：120Hz / 240Hz 设备一帧内会收到多次 pointermove 与滚轮，逐个分发会让拖拽在一帧内提交多次事务。
  *    移动只保留每个指针的最新一次，滚轮位移累加，在渲染器本帧开始时统一冲刷 (与渲染同帧，不增加延迟)；
  *    按下、抬起、取消前先冲刷该指针待分发的移动，保证事件顺序。
+ * 7. 光标全部来自引擎的光标注册表 (自绘 SVG)：按缓存键转为 CSS 光标并复用；注册表的定义或配色变化时
+ *    清空缓存并刷新当前光标。未注册的光标名当作 CSS 光标关键字直接使用。
  */
 
 import type {
@@ -52,40 +54,6 @@ interface PendingWheel {
 /** 滚轮位移统一为像素：Firefox 等以行或页为单位上报 */
 const WHEEL_LINE_HEIGHT = 16;
 
-/**
- * 旋转光标：系统没有旋转光标，按角度生成 SVG 并缓存 (按 15° 取整，最多 24 个)
- * 黑芯白边是系统光标的通用画法，在任意底色上都清晰，不随主题变化，因此不取主题色
- */
-const ROTATE_CURSOR_STEP = 15;
-const CURSOR_INK = 'black';
-const CURSOR_HALO = 'white';
-const rotateCursorCache = new Map<number, string>();
-
-function rotateCursorCss(angle: number): string {
-  const step = (((Math.round(angle / ROTATE_CURSOR_STEP) * ROTATE_CURSOR_STEP) % 360) + 360) % 360;
-  let css = rotateCursorCache.get(step);
-  if (!css) {
-    // 一段大圆弧 + 两端切向实心箭头，先画白色描边打底再画黑芯
-    const arc = 'M14.5 6.5A13.5 13.5 0 0 0 14.5 25.5';
-    const arrows = ['17.5,3.5 12.4,4.4 16.6,8.6', '17.5,28.5 16.6,23.4 12.4,27.6'];
-    const layer = (color: string, halo: boolean) =>
-      `<path d="${arc}" stroke="${color}" stroke-width="${halo ? 4 : 1.75}" stroke-linecap="round"/>` +
-      arrows
-        .map((points) =>
-          halo
-            ? `<polygon points="${points}" fill="${color}" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>`
-            : `<polygon points="${points}" fill="${color}"/>`
-        )
-        .join('');
-    const svg =
-      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">` +
-      `<g transform="rotate(${step} 16 16)">${layer(CURSOR_HALO, true)}${layer(CURSOR_INK, false)}</g></svg>`;
-    css = `url("data:image/svg+xml,${encodeURIComponent(svg)}") 16 16, crosshair`;
-    rotateCursorCache.set(step, css);
-  }
-  return css;
-}
-
 export interface HostBridgeOptions {
   container: HTMLElement;
   engine: SkyNoteEngine;
@@ -113,6 +81,11 @@ export class DOMHostBridge implements CanvasHost {
   /** 按下时的连击序号，移动与抬起沿用 */
   private clickCount = 1;
   private textInput: DOMTextInput | null = null;
+  /** 当前光标：注册表变化时按它重新生成 */
+  private cursor: CanvasCursor = 'default';
+  /** 光标缓存键 → CSS cursor 值 */
+  private readonly cursorCss = new Map<string, string>();
+  private readonly unsubscribeCursors: () => void;
 
   constructor(options: HostBridgeOptions) {
     this.overlay = options.overlay;
@@ -121,10 +94,28 @@ export class DOMHostBridge implements CanvasHost {
     this.requestFrame = options.requestFrame;
     this.onInteractionChange = options.onInteractionChange;
     this.bindDomEvents();
+    this.unsubscribeCursors = this.engine.cursors.subscribe(() => {
+      this.cursorCss.clear();
+      this.setCursor(this.cursor);
+    });
+    // 挂载即用自绘的默认光标：否则第一次交互之前显示的是系统箭头
+    this.setCursor('default');
   }
 
   setCursor(cursor: CanvasCursor): void {
-    this.container.style.cursor = typeof cursor === 'string' ? cursor : rotateCursorCss(cursor.angle);
+    this.cursor = cursor;
+    const rendered = this.engine.cursors.render(cursor);
+    if (!rendered) {
+      this.container.style.cursor = typeof cursor === 'string' ? cursor : 'default';
+      return;
+    }
+    let css = this.cursorCss.get(rendered.key);
+    if (!css) {
+      const { svg, hotspot, fallback } = rendered;
+      css = `url("data:image/svg+xml,${encodeURIComponent(svg)}") ${hotspot.x} ${hotspot.y}, ${fallback}`;
+      this.cursorCss.set(rendered.key, css);
+    }
+    this.container.style.cursor = css;
   }
 
   capturePointer(pointerId: number): void {
@@ -170,6 +161,8 @@ export class DOMHostBridge implements CanvasHost {
   }
 
   destroy(): void {
+    this.unsubscribeCursors();
+    this.cursorCss.clear();
     this.textInput?.close();
     this.pendingMoves.clear();
     this.pendingWheels.clear();
