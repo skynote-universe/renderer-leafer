@@ -293,6 +293,18 @@ describe('Primitive Mapper', () => {
     expect(shape.opacity).toBe(1);
   });
 
+  it('strokeOpacity 转为描边纯色画笔的透明度，不影响填充', () => {
+    const shape = createLeaferShape({
+      kind: 'polygon',
+      points: [0, 0, 10, 0, 5, 10],
+      fill: '#FFFFFF',
+      stroke: '#3366FF',
+      strokeOpacity: 0.4
+    }) as RectShape;
+    expect(shape.stroke).toEqual({ type: 'solid', color: '#3366FF', opacity: 0.4 });
+    expect(shape.fill).toBe('#FFFFFF');
+  });
+
   it('只复用同一个类的图元：图片继承自矩形、盒子继承自分组，也不能互相复用', () => {
     const image = new Image({ url: 'https://example.com/a.png', width: 10, height: 10 });
     expect(updateLeaferShape(image, { kind: 'rect', x: 0, y: 0, width: 10, height: 10 })).toBe(false);

@@ -40,6 +40,7 @@ interface ShapeSpec {
 /** 可描边图元的公共字段 */
 interface StrokeFields {
   stroke?: string;
+  strokeOpacity?: number;
   strokeWidth?: number;
   strokeDashArray?: number[];
   strokeCap?: StrokeCap;
@@ -66,7 +67,7 @@ function paint(color: string | undefined, opacity: number | undefined): string |
 
 function strokeProps(p: StrokeFields): IUIInputData {
   return {
-    stroke: p.stroke,
+    stroke: paint(p.stroke, p.strokeOpacity),
     strokeWidth: p.strokeWidth,
     // Leafer 的虚线属性名为 dashPattern
     dashPattern: p.strokeDashArray,
