@@ -3,7 +3,22 @@
   "version": "0.1.0",
   "type": "module",
   "description": "SkyNote LeaferJS high-performance renderer adapter & scheduler",
-  "license": "Apache-2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/skynote-universe/renderer-leafer.git"
+  },
+  "homepage": "https://github.com/skynote-universe/renderer-leafer#readme",
+  "bugs": {
+    "url": "https://github.com/skynote-universe/renderer-leafer/issues"
+  },
+  "keywords": [
+    "whiteboard",
+    "infinite-canvas",
+    "canvas",
+    "leafer",
+    "renderer"
+  ],
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
@@ -12,7 +27,12 @@
       "import": "./src/index.ts"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsdown",
+    "prepack": "tsdown",
     "test": "vitest run --dir tests",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
@@ -28,6 +48,14 @@
     "vitest": "^5.0.2"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      }
+    }
   }
 }
