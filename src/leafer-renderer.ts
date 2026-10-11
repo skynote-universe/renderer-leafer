@@ -30,6 +30,7 @@ import {
 import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
 import { ContentOrderSync } from './layers/content-order-sync';
+import { ImageNodeRenderer } from './node/image-node-renderer';
 
 const OVERLAY_ESCAPE_SCOPE_ID = 'renderer:overlay-escape';
 const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
@@ -96,6 +97,12 @@ export class LeaferRenderer implements CanvasRenderer {
 
     // 绘制文字必须用 Leafer 自己的测量 (与画出的字形一致)，不借用引擎上可能被替换的测量器
     const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
+    this.nodeRenderers.register(
+      new ImageNodeRenderer((assetId) => {
+        const asset = engine.documentStore.getView().assets?.[assetId];
+        return asset ? { src: asset.src } : undefined;
+      }, engine.assets)
+    );
     this.overlay = new LeaferOverlay(overlayLayer, mapper);
     this.nodeLayer = new NodeLayer({
       contentLayer: this.contentLayer,

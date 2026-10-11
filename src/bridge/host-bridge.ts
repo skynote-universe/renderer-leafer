@@ -313,7 +313,8 @@ export class DOMHostBridge implements CanvasHost {
       for (const type of e.clipboardData.types) {
         if (type !== 'Files') data[type] = e.clipboardData.getData(type);
       }
-      if (clipboard.paste(data)) e.preventDefault();
+      const files = e.clipboardData.files ? Array.from(e.clipboardData.files) : [];
+      if (clipboard.paste(data, files.length > 0 ? files : undefined)) e.preventDefault();
       return;
     }
     const data = e.type === 'cut' ? clipboard.cut() : clipboard.copy();
