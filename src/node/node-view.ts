@@ -124,6 +124,11 @@ export class NodeView {
     this.renderContent(context, detail);
   }
 
+  /** 资产元数据变化不改节点版本，显式使内容缓存失效。 */
+  invalidateContent(): void {
+    this.dataVersion = -1;
+  }
+
   /** 释放图元；原生渲染器的资源成对 destroy */
   destroy(): void {
     if (this.detail === 'full') this.env.renderers.get(this.node.nodeType)?.destroy?.(this.shapes, this.node);

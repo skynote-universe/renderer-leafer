@@ -43,6 +43,41 @@ function imageNode(assetId = 'first'): NodeEntity & { image: { assetId: string; 
 }
 
 describe('图片渲染生命周期', () => {
+  it('资产源地址变化会绕过节点版本缓存，释放旧 URL；删除资产后恢复占位', async () => {
+    vi.stubGlobal('Image', TestImage);
+    const resolve = vi.fn((src: string) => `blob:${src}`);
+    const release = vi.fn();
+    const engine = new SkyNoteEngine({ assets: { upload: vi.fn(), resolve, release } });
+    engine.nodeTypes.register({
+      type: 'image',
+      label: '图片',
+      defaultData: {},
+      opacityBehavior: 'renderer-defined',
+      assets: {
+        collect: (node) => [(node as ReturnType<typeof imageNode>).image.assetId],
+        remap: () => ({})
+      }
+    });
+    engine.documentStore.addNode(imageNode());
+    engine.documentStore.commit({
+      patches: [
+        { op: 'set', path: ['assets', 'first'], value: { id: 'first', src: 'memory:old', mimeType: 'image/png' } }
+      ]
+    });
+    const renderer = new LeaferRenderer(engine, document.createElement('div'));
+    await Promise.resolve();
+    TestImage.instances[0].onload!();
+    engine.documentStore.commit({ patches: [{ op: 'set', path: ['assets', 'first', 'src'], value: 'memory:new' }] });
+    renderer.renderFrame();
+    await Promise.resolve();
+    expect(resolve).toHaveBeenCalledWith('memory:new', expect.anything());
+    expect(release).toHaveBeenCalledWith('memory:old', 'blob:memory:old');
+    engine.documentStore.commit({ patches: [{ op: 'unset', path: ['assets', 'first'] }] });
+    renderer.renderFrame();
+    expect(release).toHaveBeenCalledWith('memory:new', 'blob:memory:new');
+    renderer.destroy();
+    engine.destroy();
+  });
   it('图片为零透明度时保留背景和边框，样式更新复用图元并保持已加载内容', async () => {
     vi.stubGlobal('Image', TestImage);
     const engine = new SkyNoteEngine();

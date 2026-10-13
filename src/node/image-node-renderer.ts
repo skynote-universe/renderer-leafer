@@ -61,7 +61,8 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
     this.updateStyle([background, placeholder, image, border], node, context);
     const state = this.states.get(image);
     const assetId = (node as ImageNodeEntity).image?.assetId;
-    if (state?.assetId !== assetId || state?.fit !== resolveFit(node as ImageNodeEntity))
+    const src = assetId ? this.getAsset(assetId)?.src : undefined;
+    if (state?.assetId !== assetId || state?.fit !== resolveFit(node as ImageNodeEntity) || state?.src !== src)
       this.load(node, placeholder, image);
   }
 

@@ -28,6 +28,22 @@ interface NodeFrame {
 
 export class NodeLayer {
   private readonly views = new Map<string, NodeView>();
+  private readonly assetNodes = new Map<string, Set<string>>();
+  private readonly nodeAssets = new Map<string, { version: number; ids: readonly string[] }>();
+
+  invalidateAssets(assetIds: ReadonlySet<string>): void {
+    for (const assetId of assetIds)
+      for (const id of this.assetNodes.get(assetId) ?? []) this.views.get(id)?.invalidateContent();
+  }
+
+  private releaseAssetIndex(id: string): void {
+    for (const assetId of this.nodeAssets.get(id)?.ids ?? []) {
+      const nodes = this.assetNodes.get(assetId)!;
+      nodes.delete(id);
+      if (!nodes.size) this.assetNodes.delete(assetId);
+    }
+    this.nodeAssets.delete(id);
+  }
   private readonly visibility: VisibilityTracker;
   private readonly env: NodeViewEnvironment;
 
@@ -91,6 +107,7 @@ export class NodeLayer {
   }
 
   destroy(nodeId: string): void {
+    this.releaseAssetIndex(nodeId);
     this.visibility.forget(nodeId);
     this.views.get(nodeId)?.destroy();
     this.views.delete(nodeId);
@@ -107,6 +124,24 @@ export class NodeLayer {
     if (!runtimeNode) return undefined;
 
     const node = runtimeNode.entity;
+    if (this.nodeAssets.get(nodeId)?.version !== runtimeNode.runtime.dataVersion) {
+      this.releaseAssetIndex(nodeId);
+      let ids: readonly string[] = [];
+      try {
+        ids = this.options.engine.nodeTypes.get(node.nodeType)?.assets?.collect(node) ?? [];
+      } catch {
+        /* 损坏节点由 NodeView 降级；索引不让无效字段中断整帧。 */
+      }
+      this.nodeAssets.set(nodeId, { version: runtimeNode.runtime.dataVersion, ids });
+      for (const assetId of ids) {
+        let nodes = this.assetNodes.get(assetId);
+        if (!nodes) {
+          nodes = new Set();
+          this.assetNodes.set(assetId, nodes);
+        }
+        nodes.add(nodeId);
+      }
+    }
     const parentView = node.parentId === undefined ? undefined : this.show(node.parentId, frame);
     const container = parentView ? parentView.children : this.options.contentLayer;
     const entering = !this.visibility.shownIds.has(nodeId);
