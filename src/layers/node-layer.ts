@@ -4,7 +4,7 @@
  */
 
 import type { Group } from 'leafer';
-import type { SkyNoteEngine } from '@skynote/core';
+import { isNodeHiddenByOpacity, type SkyNoteEngine } from '@skynote/core';
 import type { LayerSyncResult, LeaferRenderContext } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
@@ -74,7 +74,9 @@ export class NodeLayer {
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
       const nodeId = visibleIds[i];
-      if (!isCommitted(nodeId) || entityStore.getNode(nodeId)?.entity.style?.opacity === 0) continue;
+      if (!isCommitted(nodeId)) continue;
+      const node = entityStore.getNode(nodeId)?.entity;
+      if (!node || isNodeHiddenByOpacity(node, this.options.engine.nodeTypes.get(node.nodeType))) continue;
       this.show(nodeId, frame);
     }
     for (const containerId of containerIds) this.show(containerId, frame);
