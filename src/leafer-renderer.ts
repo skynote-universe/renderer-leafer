@@ -43,6 +43,7 @@ export class LeaferRenderer implements CanvasRenderer {
   readonly backgroundLayer = new Group();
   /** 节点与连线按层级排列所在的内容层 */
   readonly contentLayer = new Group();
+  readonly images: ImageNodeRenderer;
 
   private readonly leafer: Leafer;
   /** 承载视口变换的场景根 */
@@ -97,16 +98,16 @@ export class LeaferRenderer implements CanvasRenderer {
 
     // 绘制文字必须用 Leafer 自己的测量 (与画出的字形一致)，不借用引擎上可能被替换的测量器
     const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
-    this.nodeRenderers.register(
-      new ImageNodeRenderer(
-        (assetId) => {
-          const asset = engine.documentStore.getView().assets?.[assetId];
-          return asset ? { src: asset.src } : undefined;
-        },
-        engine.assets,
-        options?.imageFailure
-      )
+    this.images = new ImageNodeRenderer(
+      (assetId) => {
+        const asset = engine.documentStore.getView().assets?.[assetId];
+        return asset ? { src: asset.src } : undefined;
+      },
+      engine.assets,
+      options?.imageFailure,
+      (id) => engine.entityStore.getNode(id)?.entity
     );
+    this.nodeRenderers.register(this.images);
     this.overlay = new LeaferOverlay(overlayLayer, mapper);
     this.nodeLayer = new NodeLayer({
       contentLayer: this.contentLayer,
@@ -132,6 +133,13 @@ export class LeaferRenderer implements CanvasRenderer {
       engine.attachHost(this.bridge),
       // 文档增量变更：登记待销毁实体与层级脏标记，合并到下一帧
       engine.documentStore.subscribe((_view, _record, changes) => {
+        if (changes.contentReplaced) this.nodeLayer.destroyAll();
+        else {
+          this.images.reconcile(changes.nodes.removed);
+          this.images.reconcile(changes.nodes.data);
+          // 仅在资产发生变化时遍历已持有的图片，正常几何帧不增加这项开销。
+          if (changes.assets.size) this.images.reconcileAssets(changes.assets);
+        }
         this.nodeLayer.invalidateAssets(changes.assets);
         for (const id of changes.nodes.removed) this.pendingRemovedNodeIds.add(id);
         for (const id of changes.connectors.removed) this.pendingRemovedConnectorIds.add(id);
@@ -299,6 +307,7 @@ export class LeaferRenderer implements CanvasRenderer {
     this.bridge.destroy();
     this.overlay.destroy();
     this.nodeLayer.destroyAll();
+    this.images.dispose();
     this.connectorLayer.destroyAll();
     this.nodeRenderers.clear();
     this.leafer.destroy();

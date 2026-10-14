@@ -43,6 +43,246 @@ function imageNode(assetId = 'first'): NodeEntity & { image: { assetId: string; 
 }
 
 describe('图片渲染生命周期', () => {
+  it('下一帧前撤销节点类型替换时，复用图元重新取得加载与重试能力', () => {
+    const engine = new SkyNoteEngine({
+      assets: {
+        upload: vi.fn(),
+        resolve: () => {
+          throw new Error('offline');
+        }
+      }
+    });
+    engine.nodeTypes.register({ type: 'image', label: '图片', defaultData: {}, opacityBehavior: 'renderer-defined' });
+    engine.documentStore.commit({
+      patches: [
+        { op: 'set', path: ['assets', 'first'], value: { id: 'first', src: 'memory:first', mimeType: 'image/png' } }
+      ]
+    });
+    engine.documentStore.addNode(imageNode());
+    const renderer = new LeaferRenderer(engine, document.createElement('div'));
+    engine.documentStore.updateNode('image', { nodeType: 'rect' });
+    expect(renderer.images.getState('image')).toBeUndefined();
+    engine.documentStore.undo();
+    renderer.renderFrame();
+    expect(renderer.images.getState('image')?.status).toBe('failed');
+    expect(renderer.images.retry(['image'])).toEqual(['image']);
+    renderer.destroy();
+    engine.destroy();
+  });
+
+  it.each(['delete', 'replace', 'asset', 'destroy'] as const)(
+    '重试中 %s 立即取消，忽略取消的适配器返回结果仍成对释放',
+    async (action) => {
+      vi.stubGlobal('Image', TestImage);
+      let retrying = false;
+      const pending: { finish: (url: string) => void; signal: AbortSignal }[] = [];
+      const release = vi.fn();
+      const engine = new SkyNoteEngine({
+        assets: {
+          upload: vi.fn(),
+          resolve: (_src, { signal }) => {
+            if (!retrying) return Promise.reject(new Error('offline'));
+            return new Promise<string>((finish) => pending.push({ finish, signal }));
+          },
+          release
+        }
+      });
+      engine.nodeTypes.register({ type: 'image', label: '图片', defaultData: {}, opacityBehavior: 'renderer-defined' });
+      engine.documentStore.commit({
+        patches: [
+          { op: 'set', path: ['assets', 'first'], value: { id: 'first', src: 'memory:first', mimeType: 'image/png' } }
+        ]
+      });
+      engine.documentStore.addNode(imageNode());
+      const renderer = new LeaferRenderer(engine, document.createElement('div'));
+      await vi.waitFor(() => expect(renderer.images.getState('image')?.status).toBe('failed'));
+      retrying = true;
+      renderer.images.retry(['image']);
+      if (action === 'delete')
+        engine.documentStore.commit({ patches: [{ op: 'unset', path: ['content', 'nodes', 'image'] }] });
+      if (action === 'replace')
+        engine.documentStore.commit({
+          patches: [{ op: 'set', path: ['content', 'nodes', 'image', 'image', 'assetId'], value: 'missing' }]
+        });
+      if (action === 'asset')
+        engine.documentStore.commit({
+          patches: [{ op: 'set', path: ['assets', 'first', 'src'], value: 'memory:changed' }]
+        });
+      if (action === 'destroy') renderer.destroy();
+      expect(pending[0].signal.aborted).toBe(true);
+      pending[0].finish('blob:late-retry');
+      await Promise.resolve();
+      expect(release).toHaveBeenCalledExactlyOnceWith('memory:first', 'blob:late-retry');
+      expect(TestImage.instances).toHaveLength(0);
+      renderer.destroy();
+      if (pending[1]) {
+        expect(pending[1].signal.aborted).toBe(true);
+        pending[1].finish('blob:late-changed');
+        await Promise.resolve();
+        expect(release).toHaveBeenCalledWith('memory:changed', 'blob:late-changed');
+      }
+      engine.destroy();
+    }
+  );
+
+  it('失败图已显示仍报告原图失败，样式刷新不自动重试，显式重试释放占位 URL', async () => {
+    vi.stubGlobal('Image', TestImage);
+    const engine = new SkyNoteEngine();
+    const context = {
+      viewport: engine.session.viewport,
+      theme: engine.session.theme,
+      isInteracting: false,
+      textEditing: null
+    };
+    const resolve = vi.fn(() => 'blob:fallback');
+    const release = vi.fn();
+    const renderer = new ImageNodeRenderer(() => undefined, undefined, { resolve, release });
+    const shapes = renderer.create(imageNode(), context);
+    await vi.waitFor(() => expect(TestImage.instances).toHaveLength(1));
+    TestImage.instances[0].onload!();
+    expect(renderer.getState('image')).toEqual({ status: 'failed', reason: 'missing-asset' });
+    renderer.update(shapes, { ...imageNode(), style: { opacity: 0.5 } }, context);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(renderer.retry(['image'])).toEqual(['image']);
+    expect(release).toHaveBeenCalledExactlyOnceWith('blob:fallback');
+    await vi.waitFor(() => expect(TestImage.instances).toHaveLength(2));
+    renderer.dispose();
+    expect(release).toHaveBeenCalledTimes(2);
+    shapes.forEach((shape) => shape.destroy());
+    engine.destroy();
+  });
+
+  it('原引用重试只接受失败节点，成功后状态更新且不修改文档或历史', async () => {
+    vi.stubGlobal('Image', TestImage);
+    const engine = new SkyNoteEngine();
+    const context = {
+      viewport: engine.session.viewport,
+      theme: engine.session.theme,
+      isInteracting: false,
+      textEditing: null
+    };
+    let unavailable = true;
+    const resolve = vi.fn(() => {
+      if (unavailable) throw new Error('offline');
+      return 'blob:restored';
+    });
+    const release = vi.fn();
+    const renderer = new ImageNodeRenderer(() => ({ src: 'memory:first' }), { upload: vi.fn(), resolve, release });
+    const listener = vi.fn();
+    const dispose = renderer.subscribe(listener);
+    const node = imageNode();
+    const before = structuredClone(node);
+    const shapes = renderer.create(node, context);
+    expect(renderer.getState(node.id)).toEqual({ status: 'failed', reason: 'load-failed' });
+    unavailable = false;
+    expect(renderer.retry(['absent', node.id, node.id])).toEqual([node.id]);
+    expect(renderer.getState(node.id)).toEqual({ status: 'loading' });
+    expect(renderer.retry([node.id])).toEqual([]);
+    await Promise.resolve();
+    TestImage.instances[0].onload!();
+    expect(renderer.getState(node.id)).toEqual({ status: 'ready' });
+    expect(renderer.retry([node.id])).toEqual([]);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(node).toEqual(before);
+    expect(listener).toHaveBeenCalled();
+    dispose();
+    listener.mockClear();
+    renderer.destroy(shapes);
+    expect(listener).not.toHaveBeenCalled();
+    expect(renderer.getState(node.id)).toBeUndefined();
+    expect(release).toHaveBeenCalledExactlyOnceWith('memory:first', 'blob:restored');
+    shapes.forEach((shape) => shape.destroy());
+    engine.destroy();
+  });
+
+  it('解码失败重试清理失败图与旧 URL，迟到失败图不能覆盖正常图', async () => {
+    vi.stubGlobal('Image', TestImage);
+    const engine = new SkyNoteEngine();
+    const context = {
+      viewport: engine.session.viewport,
+      theme: engine.session.theme,
+      isInteracting: false,
+      textEditing: null
+    };
+    const release = vi.fn();
+    const releaseFailure = vi.fn();
+    let finish!: (url: string) => void;
+    const renderer = new ImageNodeRenderer(
+      () => ({ src: 'memory:first' }),
+      {
+        upload: vi.fn(),
+        resolve: () => 'blob:original',
+        release
+      },
+      {
+        resolve: () =>
+          new Promise<string>((resolve) => {
+            finish = resolve;
+          }),
+        release: releaseFailure
+      }
+    );
+    const shapes = renderer.create(imageNode(), context);
+    await Promise.resolve();
+    TestImage.instances[0].onerror!();
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    expect(renderer.getState('image')).toEqual({ status: 'failed', reason: 'decode-failed' });
+    expect(renderer.retry(['image'])).toEqual(['image']);
+    await Promise.resolve();
+    TestImage.instances[1].onload!();
+    finish('blob:late-fallback');
+    await vi.waitFor(() => expect(releaseFailure).toHaveBeenCalledExactlyOnceWith('blob:late-fallback'));
+    expect((shapes[2] as Rect).fill).toMatchObject({ url: 'blob:original' });
+    expect(renderer.getState('image')).toEqual({ status: 'ready' });
+    renderer.destroy(shapes);
+    expect(release).toHaveBeenCalledTimes(2);
+    shapes.forEach((shape) => shape.destroy());
+    engine.destroy();
+  });
+
+  it('整体替换相同节点 ID 立即取消重试，下一帧前迟到结果仅释放', async () => {
+    vi.stubGlobal('Image', TestImage);
+    let finish!: (url: string) => void;
+    let signal!: AbortSignal;
+    let retrying = false;
+    const release = vi.fn();
+    const engine = new SkyNoteEngine({
+      assets: {
+        upload: vi.fn(),
+        resolve: (_src, options) => {
+          if (!retrying) throw new Error('offline');
+          signal = options.signal;
+          return new Promise<string>((resolve) => {
+            finish = resolve;
+          });
+        },
+        release
+      }
+    });
+    engine.nodeTypes.register({ type: 'image', label: '图片', defaultData: {}, opacityBehavior: 'renderer-defined' });
+    engine.documentStore.commit({
+      patches: [
+        { op: 'set', path: ['assets', 'first'], value: { id: 'first', src: 'memory:first', mimeType: 'image/png' } }
+      ]
+    });
+    engine.documentStore.addNode(imageNode());
+    const renderer = new LeaferRenderer(engine, document.createElement('div'));
+    expect(renderer.images.getState('image')?.status).toBe('failed');
+    retrying = true;
+    renderer.images.retry(['image']);
+    const before = structuredClone(engine.documentStore.getView());
+    engine.documentStore.replaceContent({ nodes: { image: imageNode() }, connectors: {} });
+    expect(signal.aborted).toBe(true);
+    expect(renderer.images.getState('image')).toBeUndefined();
+    finish('blob:late');
+    await Promise.resolve();
+    expect(release).toHaveBeenCalledExactlyOnceWith('memory:first', 'blob:late');
+    expect(TestImage.instances).toHaveLength(0);
+    expect(engine.documentStore.getView().content).toEqual(before.content);
+    renderer.destroy();
+    engine.destroy();
+  });
+
   it('宿主失败图独立解析与释放，替换后退回原图且不改写节点', async () => {
     vi.stubGlobal('Image', TestImage);
     const engine = new SkyNoteEngine();

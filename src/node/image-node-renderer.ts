@@ -8,15 +8,13 @@
 
 import { Rect, Text } from 'leafer';
 import type { IUIInputData } from 'leafer';
-import type { AssetAdapter, NodeEntity, NodeFill } from '@skynote/core';
+import type { AssetAdapter, ImageLoadingController, ImageLoadState, NodeEntity, NodeFill } from '@skynote/core';
 import { resolveThemeColor } from '@skynote/core';
 import type { LeaferNodeLifecycleRenderer } from '../registry/leafer-node-renderer-registry';
 import type { ImageFailureAppearance, LeaferRenderContext, LeaferShape } from '../types';
 
 interface ImageNodeState {
-  readonly assetId: string;
   readonly src: string;
-  readonly fit: string;
   readonly controller: AbortController;
   url?: string;
   preloader?: HTMLImageElement;
@@ -35,16 +33,76 @@ interface FailureState {
   loaded?: boolean;
 }
 
-export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
+export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoadingController {
   readonly nodeType = 'image';
   private readonly states = new Map<Rect, ImageNodeState>();
   private readonly failures = new Map<Rect, FailureState>();
+  private readonly views = new Map<
+    string,
+    { node: NodeEntity; shapes: LeaferShape[]; assetId?: string; src?: string; fit?: string }
+  >();
+  private readonly nodeIds = new WeakMap<Rect, string>();
+  private readonly loadStates = new Map<string, ImageLoadState>();
+  private readonly listeners = new Set<() => void>();
 
   constructor(
     private readonly getAsset: (assetId: string) => { src: string } | undefined,
     private readonly assets: AssetAdapter | undefined,
-    private readonly failureAppearance?: ImageFailureAppearance
+    private readonly failureAppearance?: ImageFailureAppearance,
+    private readonly getNode?: (nodeId: string) => NodeEntity | undefined
   ) {}
+
+  getState(nodeId: string): ImageLoadState | undefined {
+    return this.loadStates.get(nodeId);
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  dispose(): void {
+    for (const { shapes } of this.views.values()) this.destroy(shapes);
+    this.listeners.clear();
+  }
+
+  retry(nodeIds: readonly string[]): readonly string[] {
+    const started: string[] = [];
+    for (const id of new Set(nodeIds)) {
+      const view = this.views.get(id);
+      if (!view || this.loadStates.get(id)?.status !== 'failed') continue;
+      const node = this.getNode ? this.getNode(id) : view.node;
+      if (!node || node.nodeType !== 'image') continue;
+      view.node = node;
+      this.load(node, view.shapes[1] as Rect, view.shapes[2] as Rect, view.shapes[4] as Text);
+      started.push(id);
+    }
+    return started;
+  }
+
+  /** 文档增量到达时立即取消过期引用，避免下一动画帧之前的异步结果写入旧视图。 */
+  reconcile(nodeIds: Iterable<string>): void {
+    if (!this.getNode) return;
+    for (const id of nodeIds) {
+      const view = this.views.get(id);
+      if (!view) continue;
+      const node = this.getNode(id);
+      if (!node || node.nodeType !== 'image') this.destroy(view.shapes);
+      else this.refresh(view.shapes, node);
+    }
+  }
+
+  private setState(nodeId: string, state: ImageLoadState | undefined): void {
+    if (state) this.loadStates.set(nodeId, state);
+    else this.loadStates.delete(nodeId);
+    for (const listener of this.listeners) listener();
+  }
+
+  reconcileAssets(assetIds: ReadonlySet<string>): void {
+    for (const [id, view] of this.views) {
+      if (view.assetId && assetIds.has(view.assetId)) this.reconcile([id]);
+    }
+  }
 
   create(node: NodeEntity, context: LeaferRenderContext): LeaferShape[] {
     const background = new Rect();
@@ -66,6 +124,8 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
       hittable: false
     });
     const shapes = [background, placeholder, image, border, status];
+    this.views.set(node.id, { node, shapes });
+    this.nodeIds.set(image, node.id);
     this.updateStyle(shapes, node, context);
     this.load(node, placeholder, image, status);
     return shapes;
@@ -78,16 +138,36 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
     const border = shapes[3] as Rect;
     const status = shapes[4] as Text;
     this.updateStyle([background, placeholder, image, border, status], node, context);
-    const state = this.states.get(image);
+    this.refresh(shapes, node);
+  }
+
+  private refresh(shapes: LeaferShape[], node: NodeEntity): void {
+    let view = this.views.get(node.id);
+    if (!view) {
+      // 引用失效后若在下一帧前撤销，NodeView 仍可能复用原图元，需重新建立其加载所有权。
+      view = { node, shapes };
+      this.views.set(node.id, view);
+      this.nodeIds.set(shapes[2] as Rect, node.id);
+    }
+    view.node = node;
+    const placeholder = shapes[1] as Rect;
+    const image = shapes[2] as Rect;
+    const status = shapes[4] as Text;
     const assetId = (node as ImageNodeEntity).image?.assetId;
     const src = assetId ? this.getAsset(assetId)?.src : undefined;
-    if (state?.assetId !== assetId || state?.fit !== resolveFit(node as ImageNodeEntity) || state?.src !== src)
+    if (view?.assetId !== assetId || view?.fit !== resolveFit(node as ImageNodeEntity) || view?.src !== src)
       this.load(node, placeholder, image, status);
   }
 
   destroy(shapes: LeaferShape[]): void {
     const image = shapes[2] as Rect | undefined;
     if (!image) return;
+    const id = this.nodeIds.get(image);
+    if (id !== undefined) {
+      this.nodeIds.delete(image);
+      this.views.delete(id);
+      this.setState(id, undefined);
+    }
     this.releaseFailure(image);
     const state = this.states.get(image);
     if (!state) return;
@@ -127,6 +207,7 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
   }
 
   private load(node: NodeEntity, placeholder: Rect, image: Rect, status: Text): void {
+    this.setState(node.id, { status: 'loading' });
     this.releaseFailure(image);
     placeholder.set({ opacity: 1 });
     status.set({ text: '图片加载中', opacity: 1 });
@@ -139,22 +220,29 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
     const imageNode = node as ImageNodeEntity;
     const assetId = imageNode.image?.assetId;
     const asset = assetId ? this.getAsset(assetId) : undefined;
+    const view = this.views.get(node.id);
+    if (view) {
+      view.assetId = assetId;
+      view.src = asset?.src;
+      view.fit = resolveFit(imageNode);
+    }
     if (!assetId || !asset || !this.assets) {
       image.set({ fill: undefined });
-      status.set({ text: !assetId || !asset ? '图片资产缺失' : '图片加载不可用' });
-      this.showFailure(node, !assetId || !asset ? 'missing-asset' : 'unavailable', placeholder, image, status);
+      const reason = !assetId || !asset ? 'missing-asset' : 'unavailable';
+      status.set({ text: reason === 'missing-asset' ? '图片资产缺失' : '图片加载不可用' });
+      this.showFailure(node, reason, placeholder, image, status);
       return;
     }
     const controller = new AbortController();
     const fit = resolveFit(imageNode);
-    const state: ImageNodeState = { assetId, src: asset.src, fit, controller };
+    const state: ImageNodeState = { src: asset.src, controller };
     this.states.set(image, state);
     image.set({ cornerRadius: node.style?.radius, opacity: node.style?.opacity ?? 1 });
     let resolving: ReturnType<AssetAdapter['resolve']>;
     try {
       resolving = this.assets.resolve(asset.src, { signal: controller.signal });
     } catch {
-      status.set({ text: '图片加载失败，请重新选择' });
+      status.set({ text: '图片加载失败，可重试或替换' });
       this.showFailure(node, 'load-failed', placeholder, image, status);
       return;
     }
@@ -175,13 +263,13 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
           image.set({ fill });
           placeholder.set({ opacity: 0 });
           status.set({ opacity: 0 });
+          this.setState(node.id, { status: 'ready' });
         };
         preloader.onerror = () => {
           if (!controller.signal.aborted && this.states.get(image) === state) {
             placeholder.set({ opacity: 1 });
-            status.set({ text: '图片无法解码，请重新选择' });
+            status.set({ text: '图片无法解码，可重试或替换' });
             this.releaseState(state);
-            state.url = undefined;
             this.showFailure(node, 'decode-failed', placeholder, image, status);
           }
         };
@@ -191,7 +279,7 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
         if (!controller.signal.aborted && this.states.get(image) === state) {
           image.set({ fill: undefined });
           placeholder.set({ opacity: 1 });
-          status.set({ text: '图片加载失败，请重新选择' });
+          status.set({ text: '图片加载失败，可重试或替换' });
           this.showFailure(node, 'load-failed', placeholder, image, status);
         }
       });
@@ -204,7 +292,10 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
       state.preloader.onerror = null;
       state.preloader.removeAttribute('src');
     }
-    if (state.url) this.assets?.release?.(state.src, state.url);
+    if (state.url) {
+      this.assets?.release?.(state.src, state.url);
+      state.url = undefined;
+    }
   }
 
   private showFailure(
@@ -214,6 +305,7 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer {
     image: Rect,
     status: Text
   ): void {
+    this.setState(node.id, { status: 'failed', reason });
     const appearance = this.failureAppearance;
     if (!appearance) return;
     this.releaseFailure(image);
