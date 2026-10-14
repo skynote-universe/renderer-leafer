@@ -98,10 +98,14 @@ export class LeaferRenderer implements CanvasRenderer {
     // 绘制文字必须用 Leafer 自己的测量 (与画出的字形一致)，不借用引擎上可能被替换的测量器
     const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
     this.nodeRenderers.register(
-      new ImageNodeRenderer((assetId) => {
-        const asset = engine.documentStore.getView().assets?.[assetId];
-        return asset ? { src: asset.src } : undefined;
-      }, engine.assets)
+      new ImageNodeRenderer(
+        (assetId) => {
+          const asset = engine.documentStore.getView().assets?.[assetId];
+          return asset ? { src: asset.src } : undefined;
+        },
+        engine.assets,
+        options?.imageFailure
+      )
     );
     this.overlay = new LeaferOverlay(overlayLayer, mapper);
     this.nodeLayer = new NodeLayer({

@@ -3,7 +3,7 @@
  * @description Leafer 渲染适配层的公共类型
  */
 
-import type { CanvasTheme, TextEditingTarget, ViewportState } from '@skynote/core';
+import type { CanvasTheme, NodeEntity, TextEditingTarget, ViewportState } from '@skynote/core';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
 
 /** 渲染器使用的 Leafer 图元 */
@@ -37,7 +37,18 @@ export interface LayerSyncResult {
 }
 
 /** 渲染器选项 */
+export interface ImageFailureAppearance {
+  resolve(
+    node: Readonly<NodeEntity>,
+    reason: 'missing-asset' | 'unavailable' | 'load-failed' | 'decode-failed',
+    options: { readonly signal: AbortSignal }
+  ): string | Promise<string>;
+  release?(url: string): void;
+}
+
 export interface LeaferRendererOptions {
+  /** 宿主提供的失败展示资源；不登记为文档资产，失败时退回内置文字。 */
+  imageFailure?: ImageFailureAppearance;
   /** 设备像素比 (默认读取 window.devicePixelRatio) */
   pixelRatio?: number;
   /** 分帧调度 (默认开启) */
