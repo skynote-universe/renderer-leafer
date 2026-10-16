@@ -319,8 +319,18 @@ export class DOMHostBridge implements CanvasHost {
     }
     const data = e.type === 'cut' ? clipboard.cut() : clipboard.copy();
     if (!data) return;
-    for (const [type, value] of Object.entries(data)) e.clipboardData.setData(type, value);
-    e.preventDefault();
+    let written = false;
+    let completed = false;
+    try {
+      for (const [type, value] of Object.entries(data)) {
+        e.clipboardData.setData(type, value);
+        written = true;
+      }
+      e.preventDefault();
+      completed = true;
+    } finally {
+      if (written) clipboard.notifyWrite(e.type === 'cut' ? 'cut' : 'copy', data, completed ? 'completed' : 'partial');
+    }
   };
 
   private handleBlur = (): void => {

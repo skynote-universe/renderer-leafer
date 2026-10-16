@@ -313,6 +313,8 @@ describe('DOMHostBridge 剪贴板', () => {
   it('画布持有焦点时复制、粘贴交给内核并阻止默认行为；内核不处理或焦点不在画布时保留默认行为', () => {
     const { engine, container, doc, bridge, fire } = setup();
     const pasted: unknown[] = [];
+    const writes = vi.fn();
+    engine.clipboard.onWrite(writes);
     engine.clipboard.register({ copy: () => ({ 'text/plain': '节点文字' }), paste: (data) => pasted.push(data) > 0 });
 
     doc.activeElement = null;
@@ -320,10 +322,47 @@ describe('DOMHostBridge 剪贴板', () => {
 
     doc.activeElement = container;
     expect(fire('copy')).toEqual({ written: { 'text/plain': '节点文字' }, prevented: true });
+    expect(writes).toHaveBeenCalledExactlyOnceWith({
+      operation: 'copy',
+      status: 'completed',
+      data: { 'text/plain': '节点文字' }
+    });
     expect(fire('paste', { 'text/plain': '外部' }).prevented).toBe(true);
     expect(pasted).toEqual([{ 'text/plain': '外部' }]);
     // 剪切没有处理者响应：保留默认行为
     expect(fire('cut').prevented).toBe(false);
+    expect(writes).toHaveBeenCalledOnce();
+    bridge.destroy();
+  });
+
+  it('部分剪贴板写入后出错仍通知保守保护，完全未写入不通知', () => {
+    const { engine, container, doc, bridge } = setup();
+    doc.activeElement = container;
+    engine.clipboard.register({ copy: () => ({ 'application/x-skynote-nodes': 'payload', 'text/plain': 'text' }) });
+    const writes = vi.fn();
+    engine.clipboard.onWrite(writes);
+    let count = 0;
+    const trigger = () =>
+      doc.listeners.get('copy')!({
+        type: 'copy',
+        defaultPrevented: false,
+        clipboardData: {
+          setData: () => {
+            if (++count === 2) throw new Error('write failed');
+          }
+        },
+        preventDefault: vi.fn()
+      });
+    expect(trigger).toThrow('write failed');
+    expect(writes).toHaveBeenCalledExactlyOnceWith({
+      operation: 'copy',
+      status: 'partial',
+      data: { 'application/x-skynote-nodes': 'payload', 'text/plain': 'text' }
+    });
+    count = 1;
+    writes.mockClear();
+    expect(trigger).toThrow('write failed');
+    expect(writes).not.toHaveBeenCalled();
     bridge.destroy();
   });
 
