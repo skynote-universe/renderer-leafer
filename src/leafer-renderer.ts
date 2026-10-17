@@ -108,7 +108,7 @@ export class LeaferRenderer implements CanvasRenderer {
       (id) => engine.entityStore.getNode(id)?.entity
     );
     this.nodeRenderers.register(this.images);
-    this.overlay = new LeaferOverlay(overlayLayer, mapper);
+    this.overlay = new LeaferOverlay(overlayLayer, mapper, () => session.theme);
     this.nodeLayer = new NodeLayer({
       contentLayer: this.contentLayer,
       engine,
@@ -123,6 +123,7 @@ export class LeaferRenderer implements CanvasRenderer {
       engine,
       overlay: this.overlay,
       requestFrame: () => this.requestRender(),
+      flushRender: () => this.renderFrame(),
       onInteractionChange: (isInteracting) => {
         this.isInteracting = isInteracting;
       }
@@ -146,10 +147,16 @@ export class LeaferRenderer implements CanvasRenderer {
         if (changes.orderChanged) this.layerOrderInvalidated = true;
         this.requestRender();
       }),
-      // 视口变换立即生效 (平移缩放零延迟跟手)，视锥、选中态与主题重绘合并到下一帧
+      // 节点类型晚于文档注册或被卸载时，使对应类型的节点视图失效并申请重绘
+      engine.nodeTypes.onChange((type) => {
+        this.nodeLayer.invalidateNodeType(type);
+        this.requestRender();
+      }),
+      // 视口变换立即生效 (平移缩放零延迟跟手)，视锥、选中态与主题重绘合并到下一帧；进入维护冻结时清除瞬态预览
       session.subscribe((change) => {
         if (change.viewportChanged) this.applyViewportTransform();
         if (change.themeChanged) this.leafer.fill = session.theme.background;
+        if (change.maintenanceChanged && session.inMaintenance) this.overlay.clearTransient();
         this.requestRender();
       })
     );

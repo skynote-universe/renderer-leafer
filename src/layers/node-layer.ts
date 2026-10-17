@@ -36,6 +36,13 @@ export class NodeLayer {
       for (const id of this.assetNodes.get(assetId) ?? []) this.views.get(id)?.invalidateContent();
   }
 
+  /** 节点类型动态注册或注销时，使该类型已缓存的视图内容失效 */
+  invalidateNodeType(type: string): void {
+    for (const view of this.views.values()) {
+      if (view.nodeType === type) view.invalidateContent();
+    }
+  }
+
   private releaseAssetIndex(id: string): void {
     for (const assetId of this.nodeAssets.get(id)?.ids ?? []) {
       const nodes = this.assetNodes.get(assetId)!;

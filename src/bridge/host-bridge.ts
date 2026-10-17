@@ -21,6 +21,8 @@
 import type {
   CanvasHost,
   CanvasKeyboardEvent,
+  CanvasPointerSample,
+  CanvasPointerType,
   OverlayChannel,
   Point,
   SkyNoteEngine,
@@ -28,7 +30,7 @@ import type {
   TextInputHandler,
   TextInputSession
 } from '@skynote/core';
-import { ClickCounter, SyntheticPointerEvent, SyntheticWheelEvent, screenToWorld } from '@skynote/core';
+import { ClickCounter, SyntheticPointerEvent, SyntheticWheelEvent, clamp, screenToWorld } from '@skynote/core';
 import { DOMTextInput, TEXT_INPUT_ATTRIBUTE } from './dom-text-input';
 
 /** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键)；画布自己的隐藏输入通道除外 */
@@ -42,6 +44,101 @@ function isEditableTarget(target: EventTarget | null): boolean {
     element.tagName === 'TEXTAREA' ||
     element.tagName === 'SELECT'
   );
+}
+
+/** 归一化原生 PointerEvent.pointerType */
+function resolvePointerType(pointerType: string | undefined): CanvasPointerType {
+  return pointerType === 'pen' || pointerType === 'touch' ? pointerType : 'mouse';
+}
+
+/**
+ * 归一化笔压感：手写笔 (pen) 保留真实 0.0 ~ 1.0 压力 (含轻触或悬停时的 0 压力)；
+ * 鼠标等无压感设备在原生事件上报 0 时统一取默认值 0.5。
+ */
+function resolvePressure(event: { readonly pressure?: number }, pointerType: CanvasPointerType): number {
+  const p = event.pressure;
+  if (pointerType === 'pen') {
+    return typeof p === 'number' && Number.isFinite(p) ? clamp(p, 0, 1) : 0.5;
+  }
+  return typeof p === 'number' && Number.isFinite(p) && p > 0 ? clamp(p, 0, 1) : 0.5;
+}
+
+/** 帧内缓冲的原始视口像素采样点 (冲刷时统一按最新容器矩形与视口矩阵换算世界坐标) */
+interface RawPointerSample {
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly pressure: number;
+}
+
+/** 一帧内单个指针待分发的移动事件及采样序列 */
+interface PendingPointerMove {
+  latest: PointerEvent;
+  readonly pointerType: CanvasPointerType;
+  samples: RawPointerSample[];
+}
+
+/** 单帧单个指针采样点数上限：防止极端帧阻塞时采样数组无限增长 */
+export const MAX_FRAME_SAMPLES = 256;
+
+/**
+ * 超出单帧容量上限时抽稀采样序列：始终保留首尾点，并按弦偏离距离 (RDP 准则) 优先保留关键拐点与压感突变点
+ */
+function compactSamples(samples: readonly RawPointerSample[], limit: number): RawPointerSample[] {
+  const n = samples.length;
+  if (n <= limit) return [...samples];
+  const keep = new Uint8Array(n);
+  keep[0] = 1;
+  keep[n - 1] = 1;
+  let keptCount = 2;
+  const segments: [number, number][] = [[0, n - 1]];
+
+  while (keptCount < limit && segments.length > 0) {
+    let bestSegIdx = -1;
+    let bestSplit = -1;
+    let bestScore = -1;
+
+    for (let s = 0; s < segments.length; s++) {
+      const [start, end] = segments[s];
+      if (end - start <= 1) continue;
+      const a = samples[start];
+      const b = samples[end];
+      const dx = b.clientX - a.clientX;
+      const dy = b.clientY - a.clientY;
+      const lenSq = dx * dx + dy * dy;
+      let segBestIdx = Math.floor((start + end) / 2);
+      let segBestScore = -1;
+      for (let i = start + 1; i < end; i++) {
+        const p = samples[i];
+        const t = lenSq === 0 ? 0 : clamp(((p.clientX - a.clientX) * dx + (p.clientY - a.clientY) * dy) / lenSq, 0, 1);
+        const dist = Math.hypot(p.clientX - (a.clientX + t * dx), p.clientY - (a.clientY + t * dy));
+        const pressureDiff = Math.abs(p.pressure - (a.pressure + t * (b.pressure - a.pressure))) * 10;
+        const score = dist + pressureDiff;
+        if (score > segBestScore) {
+          segBestScore = score;
+          segBestIdx = i;
+        }
+      }
+      if (segBestScore > bestScore) {
+        bestScore = segBestScore;
+        bestSegIdx = s;
+        bestSplit = segBestIdx;
+      }
+    }
+
+    if (bestSegIdx === -1 || bestSplit === -1) break;
+    const [start, end] = segments[bestSegIdx];
+    segments.splice(bestSegIdx, 1);
+    keep[bestSplit] = 1;
+    keptCount++;
+    if (bestSplit - start > 1) segments.push([start, bestSplit]);
+    if (end - bestSplit > 1) segments.push([bestSplit, end]);
+  }
+
+  const out: RawPointerSample[] = [];
+  for (let i = 0; i < n; i++) {
+    if (keep[i]) out.push(samples[i]);
+  }
+  return out;
 }
 
 /** 一帧内累加的滚轮输入 (同一种手势：平移或缩放) */
@@ -61,6 +158,8 @@ export interface HostBridgeOptions {
   overlay: OverlayChannel;
   /** 申请下一帧：渲染器在帧开始时调用 flushPendingInput 冲刷合并后的输入 */
   requestFrame: () => void;
+  /** 立即冲刷并同步渲染当前帧 (如指针抬起提交实体后避免空帧闪烁) */
+  flushRender?: () => void;
   /** 指针按下 / 抬起时通知 (渲染器据此调整 LOD) */
   onInteractionChange: (isInteracting: boolean) => void;
 }
@@ -70,9 +169,10 @@ export class DOMHostBridge implements CanvasHost {
   private readonly container: HTMLElement;
   private readonly engine: SkyNoteEngine;
   private readonly requestFrame: () => void;
+  private readonly flushRender?: () => void;
   private readonly onInteractionChange: (isInteracting: boolean) => void;
   private readonly abortController = new AbortController();
-  private pendingMoves = new Map<number, PointerEvent>();
+  private pendingMoves = new Map<number, PendingPointerMove>();
   /** 键为是否缩放手势：平移与缩放各自累加，同帧内先后发生时分别分发 */
   private pendingWheels = new Map<boolean, PendingWheel>();
   private containerRect: DOMRect | null = null;
@@ -92,6 +192,7 @@ export class DOMHostBridge implements CanvasHost {
     this.container = options.container;
     this.engine = options.engine;
     this.requestFrame = options.requestFrame;
+    this.flushRender = options.flushRender;
     this.onInteractionChange = options.onInteractionChange;
     this.bindDomEvents();
     this.unsubscribeCursors = this.engine.cursors.subscribe(() => {
@@ -149,8 +250,8 @@ export class DOMHostBridge implements CanvasHost {
     if (this.pendingMoves.size > 0) {
       const moves = this.pendingMoves;
       this.pendingMoves = new Map();
-      for (const e of moves.values()) {
-        this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(e));
+      for (const pending of moves.values()) {
+        this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(pending.latest, pending.samples));
       }
     }
     if (this.pendingWheels.size > 0) {
@@ -213,17 +314,35 @@ export class DOMHostBridge implements CanvasHost {
     }
   }
 
-  private toCanvasPointerEvent(e: PointerEvent): SyntheticPointerEvent {
+  private toCanvasPointerEvent(e: PointerEvent, rawSamples?: readonly RawPointerSample[]): SyntheticPointerEvent {
     const rect = this.getContainerRect();
+    const viewport = this.engine.session.viewport;
+    const pointerType = resolvePointerType(e.pointerType);
     const clientPoint: Point = { x: e.clientX - rect.left, y: e.clientY - rect.top };
-    const point = screenToWorld(clientPoint, this.engine.session.viewport);
+    const point = screenToWorld(clientPoint, viewport);
+    const pressure = resolvePressure(e, pointerType);
+    let samples: CanvasPointerSample[] | undefined;
+    if (rawSamples && rawSamples.length > 0) {
+      const compacted =
+        rawSamples.length > MAX_FRAME_SAMPLES ? compactSamples(rawSamples, MAX_FRAME_SAMPLES) : rawSamples;
+      samples = compacted.map((s) => {
+        const sampleClient: Point = { x: s.clientX - rect.left, y: s.clientY - rect.top };
+        return {
+          point: screenToWorld(sampleClient, viewport),
+          clientPoint: sampleClient,
+          pressure: s.pressure
+        };
+      });
+    }
     return new SyntheticPointerEvent({
       point,
       clientPoint,
       pointerId: e.pointerId,
+      pointerType,
       button: e.button,
       modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
-      pressure: e.pressure || 0.5,
+      pressure,
+      samples,
       clickCount: this.clickCount,
       // 命中拾取延迟到首次读取 target (多数移动监听者不读)
       resolveTarget: () => this.engine.hitTestNode(point),
@@ -236,7 +355,7 @@ export class DOMHostBridge implements CanvasHost {
     const pending = this.pendingMoves.get(pointerId);
     if (!pending) return;
     this.pendingMoves.delete(pointerId);
-    this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(pending));
+    this.engine.pointer.dispatchPointerMove(this.toCanvasPointerEvent(pending.latest, pending.samples));
   }
 
   private handlePointerDown = (e: PointerEvent): void => {
@@ -257,7 +376,29 @@ export class DOMHostBridge implements CanvasHost {
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
-    this.pendingMoves.set(e.pointerId, e);
+    const pointerType = resolvePointerType(e.pointerType);
+    // getCoalescedEvents 必须在原生事件回调同步栈内读取，浏览器在事件返回后会清空合并队列
+    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
+    const sourceEvents = coalesced && coalesced.length > 0 ? coalesced : [e];
+    let pending = this.pendingMoves.get(e.pointerId);
+    if (!pending) {
+      pending = { latest: e, pointerType, samples: [] };
+      this.pendingMoves.set(e.pointerId, pending);
+    } else {
+      pending.latest = e;
+    }
+    for (let i = 0; i < sourceEvents.length; i++) {
+      const item = sourceEvents[i];
+      pending.samples.push({
+        clientX: item.clientX,
+        clientY: item.clientY,
+        pressure: resolvePressure(item, pointerType)
+      });
+    }
+    // 防止帧长期未冲刷时数组膨胀：超过两倍上限时先行抽稀一次
+    if (pending.samples.length > MAX_FRAME_SAMPLES * 2) {
+      pending.samples = compactSamples(pending.samples, MAX_FRAME_SAMPLES);
+    }
     this.requestFrame();
   };
 
@@ -266,6 +407,7 @@ export class DOMHostBridge implements CanvasHost {
     this.onInteractionChange(false);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerUp(canvasEvent);
+    this.flushRender?.();
   };
 
   private handlePointerCancel = (e: PointerEvent): void => {
@@ -296,6 +438,10 @@ export class DOMHostBridge implements CanvasHost {
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (isEditableTarget(e.target)) return;
+    // 当画布持有焦点时按下 Alt 键，阻止浏览器默认的 Windows 系统菜单栏激活与失焦行为，防止画布闪烁
+    if (e.key === 'Alt') {
+      e.preventDefault();
+    }
     this.engine.inputScopes.dispatchKeyDown(this.toCanvasKeyboardEvent(e));
   };
 
@@ -334,6 +480,8 @@ export class DOMHostBridge implements CanvasHost {
   };
 
   private handleBlur = (): void => {
+    this.pendingMoves.clear();
+    this.pendingWheels.clear();
     this.engine.inputScopes.dispatchBlur();
   };
 

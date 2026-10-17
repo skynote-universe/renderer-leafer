@@ -8,7 +8,13 @@
  * 2. 就地复用：同一会话的图元按位置与类型就地更新，拖拽中逐帧刷新不反复创建对象。
  */
 
-import type { CanvasPrimitive, OverlayChannel, OverlayOptions } from '@skynote/core';
+import {
+  applyThemeToPrimitives,
+  type CanvasPrimitive,
+  type CanvasTheme,
+  type OverlayChannel,
+  type OverlayOptions
+} from '@skynote/core';
 import { Group } from 'leafer';
 import type { LeaferShape } from '../types';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
@@ -24,7 +30,8 @@ export class LeaferOverlay implements OverlayChannel {
 
   constructor(
     private readonly layer: Group,
-    private readonly mapper: PrimitiveMapper
+    private readonly mapper: PrimitiveMapper,
+    private readonly getTheme?: () => CanvasTheme
   ) {}
 
   /** 空数组即清除该会话 */
@@ -40,7 +47,8 @@ export class LeaferOverlay implements OverlayChannel {
       this.sessions.set(sessionId, session);
     }
     session.transient = options?.transient ?? false;
-    session.shapes = this.mapper.reconcile(session.group, session.shapes, primitives);
+    const themed = this.getTheme ? applyThemeToPrimitives(primitives, this.getTheme()) : primitives;
+    session.shapes = this.mapper.reconcile(session.group, session.shapes, themed);
   }
 
   clear(sessionId: string): void {

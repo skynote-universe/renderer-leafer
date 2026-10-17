@@ -165,4 +165,79 @@ describe('LeaferAdapter', () => {
     expect(engine.host).toBe(DETACHED_CANVAS_HOST);
     engine.destroy();
   });
+
+  it('专有结构 validate 校验失败时局部降级为占位框且不逐帧重复报错；动态注册类型与进入维护冻结时同步响应', () => {
+    const engine = new SkyNoteEngine();
+    let validateCalls = 0;
+    let composeCalls = 0;
+
+    engine.documentStore.addNode({
+      id: 'path_1',
+      type: 'node',
+      nodeType: 'custom:path',
+      x: 20,
+      y: 20,
+      width: 100,
+      height: 60,
+      rotation: 0,
+      zIndex: 'a0',
+      locked: false,
+      data: { broken: true }
+    });
+
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 800 });
+    Object.defineProperty(container, 'clientHeight', { value: 600 });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
+
+    // 1. 动态晚注册节点类型且首次校验失败：自动降级为占位框，compose 不被调用
+    engine.nodeTypes.register({
+      type: 'custom:path',
+      label: '路径',
+      defaultData: { broken: false },
+      validate: (node) => {
+        validateCalls++;
+        return (node.data as { broken?: boolean })?.broken ? '路径锚点非法' : null;
+      },
+      compose: () => {
+        composeCalls++;
+        return [{ kind: 'path', d: 'M 0 0 L 100 60', stroke: '$accent', strokeWidth: 2 }];
+      }
+    });
+    renderer.renderFrame();
+    expect(validateCalls).toBe(1);
+    expect(composeCalls).toBe(0);
+    expect(errorSpy).toHaveBeenCalledOnce();
+
+    // 2. 后续无关帧 (如平移视口) 不重复执行 validate 或抛错
+    engine.session.setViewport({ x: 10, y: 10 });
+    renderer.renderFrame();
+    expect(validateCalls).toBe(1);
+    expect(errorSpy).toHaveBeenCalledOnce();
+
+    // 3. 修复节点数据后恢复正常 compose 绘制
+    engine.documentStore.updateNode('path_1', { data: { broken: false } });
+    renderer.renderFrame();
+    expect(composeCalls).toBe(1);
+
+    // 4. 进入 beginMaintenance 时立即清空瞬态覆盖层 (保留持久覆盖层)
+    const ephemeralGroup = renderer.contentLayer.parent!.children[2] as unknown as { children: unknown[] };
+    engine.host.overlay.setPrimitives('draft:ink', [{ kind: 'path', d: 'M 0 0 L 10 10' }], { transient: true });
+    engine.host.overlay.setPrimitives('selection:outline', [{ kind: 'rect', x: 0, y: 0, width: 10, height: 10 }]);
+    expect(ephemeralGroup.children.length).toBe(2);
+
+    const maintenance = engine.beginMaintenance();
+    expect(ephemeralGroup.children.length).toBe(1);
+    maintenance.resume();
+
+    // 5. 覆盖层图元颜色引用解析：$red 等调色板变量经主题自动转为真实色值
+    engine.host.overlay.setPrimitives('draft:palette', [{ kind: 'path', d: 'M 0 0 L 10 10', stroke: '$red' }]);
+    const paletteSession = (ephemeralGroup.children as Array<{ children: Array<{ stroke: string }> }>).at(-1);
+    expect(paletteSession?.children[0]?.stroke).toBe(engine.session.theme.palette.red);
+
+    errorSpy.mockRestore();
+    renderer.destroy();
+    engine.destroy();
+  });
 });

@@ -73,6 +73,11 @@ export class NodeView {
     this.group.add(this.content);
   }
 
+  /** 当前视图对应的节点类型标识 */
+  get nodeType(): string {
+    return this.node.nodeType;
+  }
+
   /**
    * 子节点与容器内连线的挂载容器，按需创建 (多数节点没有子节点)，位于自身内容之上
    * 声明 clipChildren 的节点类型 (画框) 用 overflow: 'hide' 的 Box 裁剪，旋转后依旧正确
@@ -124,9 +129,10 @@ export class NodeView {
     this.renderContent(context, detail);
   }
 
-  /** 资产元数据变化不改节点版本，显式使内容缓存失效。 */
+  /** 资产元数据或节点类型注册表变化不改节点版本，显式使内容缓存失效。 */
   invalidateContent(): void {
     this.dataVersion = -1;
+    if (this.detail === 'broken') this.detail = null;
   }
 
   /** 释放图元；原生渲染器的资源成对 destroy */
@@ -144,6 +150,11 @@ export class NodeView {
         this.renderPlaceholder(theme);
         this.detail = 'placeholder';
         return;
+      }
+
+      const validationError = this.env.nodeTypes.validateNode(node, this.dataVersion);
+      if (validationError) {
+        throw new Error(validationError);
       }
 
       const nativeRenderer = this.env.renderers.get(node.nodeType);

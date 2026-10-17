@@ -273,6 +273,89 @@ describe('DOMHostBridge 按帧合并输入', () => {
     expect(svgOf()).not.toContain('<circle');
     bridge.destroy();
   });
+
+  it('保留同帧多次 pointermove 与 getCoalescedEvents 的完整采样序列、手写笔 0 压感，以及超限拐点抽稀', () => {
+    const { engine, container, bridge } = setup();
+    const received: CanvasPointerEvent[] = [];
+    engine.pointer.register('brush-probe', {
+      onPointerDown: (e) => received.push(e),
+      onPointerMove: (e) => received.push(e),
+      onPointerUp: (e) => received.push(e)
+    });
+
+    // 1. 手写笔轻触按下：pressure = 0 必须原样保留为 0 (不能被 || 0.5 吞掉)
+    container.fire('pointerdown', { pointerId: 7, pointerType: 'pen', clientX: 10, clientY: 20, pressure: 0 });
+    expect(received).toHaveLength(1);
+    expect(received[0].pointerType).toBe('pen');
+    expect(received[0].pressure).toBe(0);
+    expect(received[0].samples).toEqual([{ point: { x: 0, y: 0 }, clientPoint: { x: 0, y: 0 }, pressure: 0 }]);
+
+    // 2. 同帧内两次 pointermove，其中第一次含 2 个 coalesced 事件，第二次含 1 个事件
+    container.fire('pointermove', {
+      pointerId: 7,
+      pointerType: 'pen',
+      clientX: 30,
+      clientY: 40,
+      pressure: 0.4,
+      getCoalescedEvents: () => [
+        { clientX: 20, clientY: 30, pressure: 0.2 },
+        { clientX: 30, clientY: 40, pressure: 0.4 }
+      ]
+    });
+    container.fire('pointermove', {
+      pointerId: 7,
+      pointerType: 'pen',
+      clientX: 50,
+      clientY: 20,
+      pressure: 0
+    });
+
+    // 抬起前自动先冲刷本帧累积的 3 个采样点
+    container.fire('pointerup', { pointerId: 7, pointerType: 'pen', clientX: 50, clientY: 20, pressure: 0 });
+    expect(received).toHaveLength(3);
+    const moveEvent = received[1];
+    expect(moveEvent.pointerType).toBe('pen');
+    expect(moveEvent.point).toEqual({ x: 40, y: 0 });
+    expect(moveEvent.pressure).toBe(0);
+    expect(moveEvent.samples).toEqual([
+      { point: { x: 10, y: 10 }, clientPoint: { x: 10, y: 10 }, pressure: 0.2 },
+      { point: { x: 20, y: 20 }, clientPoint: { x: 20, y: 20 }, pressure: 0.4 },
+      { point: { x: 40, y: 0 }, clientPoint: { x: 40, y: 0 }, pressure: 0 }
+    ]);
+
+    // 3. 单帧超过 256 个点时抽稀至 256 点，且保留首点、末点与尖角拐点
+    received.length = 0;
+    const sharpCornerIndex = 150;
+    const hugeCoalesced = Array.from({ length: 320 }, (_, i) => ({
+      clientX: 10 + i,
+      clientY: i === sharpCornerIndex ? 500 : 20,
+      pressure: 0.5
+    }));
+    container.fire('pointermove', {
+      pointerId: 8,
+      pointerType: 'pen',
+      clientX: 10 + 319,
+      clientY: 20,
+      pressure: 0.5,
+      getCoalescedEvents: () => hugeCoalesced
+    });
+    bridge.flushPendingInput();
+    expect(received).toHaveLength(1);
+    const compacted = received[0].samples;
+    expect(compacted).toHaveLength(256);
+    expect(compacted[0].point).toEqual({ x: 0, y: 0 });
+    expect(compacted[compacted.length - 1].point).toEqual({ x: 319, y: 0 });
+    expect(compacted.some((s) => s.point.x === sharpCornerIndex && s.point.y === 480)).toBe(true);
+
+    // 4. 窗口失焦 (blur) 时清空尚未冲刷的移动队列，防止恢复焦点后补发陈旧轨迹
+    received.length = 0;
+    container.fire('pointermove', { pointerId: 8, clientX: 100, clientY: 100 });
+    container.fire('blur', {});
+    bridge.flushPendingInput();
+    expect(received).toHaveLength(0);
+
+    bridge.destroy();
+  });
 });
 
 describe('DOMHostBridge 剪贴板', () => {
