@@ -13,7 +13,10 @@ export class VisibilityTracker {
   private nextShown = new Set<string>();
   private readonly offscreen = new Set<string>();
 
-  constructor(private readonly offscreenLimit: number) {}
+  constructor(
+    private readonly offscreenLimit: number,
+    private readonly hideChildrenFirst = false
+  ) {}
 
   /** 当前挂载在场景树上的实体 */
   get shownIds(): ReadonlySet<string> {
@@ -39,12 +42,16 @@ export class VisibilityTracker {
    * 结束本帧：离开视野者交给 onHide 并进入 LRU 队尾，超出限额者从队首出队后交给 onEvict
    * 先出队再回调，保证回调中缓存缺失时淘汰循环依旧前进
    */
-  endFrame(onHide: (id: string) => void, onEvict: (id: string) => void): void {
+  endFrame(onHide: (ids: readonly string[]) => void, onEvict: (id: string) => void): void {
+    const leaving: string[] = [];
     for (const id of this.shown) {
       if (this.nextShown.has(id)) continue;
-      onHide(id);
+      leaving.push(id);
       this.offscreen.add(id);
     }
+    // 节点按祖先先于后代标记：反向摘除避免原生场景树递归解绑，LRU 插入顺序仍保持不变。
+    if (this.hideChildrenFirst) leaving.reverse();
+    if (leaving.length) onHide(leaving);
     this.shown = this.nextShown;
 
     while (this.offscreen.size > this.offscreenLimit) {

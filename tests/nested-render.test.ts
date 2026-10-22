@@ -60,6 +60,112 @@ function expectBoundsClose(actual: { x: number; y: number; width: number; height
 }
 
 describe('嵌套渲染 (ADR-114)', () => {
+  it.each([0, 10])('共享容器中部分节点和连线离场后复用存活图元，缓存=%s', (cache) => {
+    const engine = new SkyNoteEngine();
+    const store = engine.documentStore;
+    store.addNode(makeNode('p'));
+    for (const [id, x] of [
+      ['a', 0],
+      ['c', 50],
+      ['b', 600],
+      ['d', 650]
+    ] as const)
+      store.addNode(makeNode(id, { parentId: 'p', x, width: 20, height: 20 }));
+    store.commit({
+      patches: [
+        { op: 'set', path: 'content.connectors.leave', value: makeConnector('leave', 'a', 'c') },
+        { op: 'set', path: 'content.connectors.stay', value: makeConnector('stay', 'b', 'd') },
+        { op: 'set', path: 'content.connectors.bridge', value: makeConnector('bridge', 'c', 'b') }
+      ]
+    });
+    const renderer = new LeaferRenderer(engine, document.createElement('div'), {
+      enableFrameScheduler: false,
+      offscreenCacheLimit: cache
+    });
+    const { nodeLayer, connectorLayer } = layers(renderer);
+    const b = nodeLayer.getGroup('b');
+    const a = nodeLayer.getGroup('a');
+    const stay = connectorLayer.getGroup('stay');
+    const bridge = connectorLayer.getGroup('bridge');
+    try {
+      engine.session.setViewport({ x: -500, y: 0 });
+      renderer.renderFrame();
+      expect([...nodeLayer.shownIds].sort()).toEqual(['b', 'd', 'p']);
+      expect([...connectorLayer.shownIds].sort()).toEqual(['bridge', 'stay']);
+      expect(nodeLayer.cacheCount).toBe(cache ? 5 : 3);
+      expect(connectorLayer.cacheCount).toBe(cache ? 3 : 2);
+      expect(nodeLayer.getGroup('b') === b).toBe(true);
+      expect(connectorLayer.getGroup('stay') === stay).toBe(true);
+      expect(connectorLayer.getGroup('bridge') === bridge).toBe(true);
+      expect(stay!.parent === nodeLayer.getChildrenContainer('p')).toBe(true);
+      expect(b!.parent === stay!.parent).toBe(true);
+      engine.session.setViewport({ x: 0, y: 0 });
+      renderer.renderFrame();
+      expect(nodeLayer.shownIds.size).toBe(5);
+      expect(connectorLayer.shownIds.size).toBe(3);
+      expect(nodeLayer.getGroup('a') === a).toBe(cache > 0);
+      expect(connectorLayer.getGroup('stay') === stay).toBe(true);
+    } finally {
+      renderer.destroy();
+      engine.destroy();
+    }
+  });
+  it.each(['group', 'frame'] as const)('解散 %s 后保留节点和内部连线图元，撤销重做均能重新挂载', (nodeType) => {
+    const engine = new SkyNoteEngine();
+    engine.nodeTypes.register({
+      type: 'frame',
+      label: '画框',
+      defaultData: {},
+      acceptsChildren: true,
+      clipChildren: true
+    });
+    const store = engine.documentStore;
+    store.addNode(makeNode('a', { x: 100, y: 100, width: 60, height: 40, zIndex: 'a0' }));
+    store.addNode(makeNode('b', { x: 220, y: 100, width: 60, height: 40, zIndex: 'a1' }));
+    const containerId = store.groupNodes(['a', 'b'])!;
+    if (nodeType === 'frame') store.updateNode(containerId, { nodeType: 'frame' });
+    store.commit({
+      patches: [{ op: 'set', path: ['content', 'connectors', 'inner'], value: makeConnector('inner', 'a', 'b') }]
+    });
+    const renderer = mount(engine);
+    const { nodeLayer, connectorLayer } = layers(renderer);
+    const a = nodeLayer.getGroup('a')!;
+    const b = nodeLayer.getGroup('b')!;
+    const connector = connectorLayer.getGroup('inner')!;
+    expect(a.parent).toBe(nodeLayer.getChildrenContainer(containerId));
+    expect(connector.parent).toBe(a.parent);
+    const bounds = engine.getNodeWorldBounds('a')!;
+    store.clearHistory();
+
+    store.ungroupNodes([containerId]);
+    expect(() => renderer.renderFrame()).not.toThrow();
+    expect(nodeLayer.getGroup('a')).toBe(a);
+    expect(nodeLayer.getGroup('b')).toBe(b);
+    expect(a.parent).toBe(renderer.contentLayer);
+    expect(connector.parent).toBe(renderer.contentLayer);
+    expect(a.destroyed).not.toBe(true);
+    expect(connector.destroyed).not.toBe(true);
+    expectBoundsClose(sceneBounds(renderer, a), bounds);
+    expect(renderer.contentLayer.children).toEqual([a, b, connector]);
+
+    store.undo();
+    renderer.renderFrame();
+    expect(a.parent).toBe(nodeLayer.getChildrenContainer(containerId));
+    expect(connector.parent).toBe(a.parent);
+    store.redo();
+    renderer.renderFrame();
+    expect(a.parent).toBe(renderer.contentLayer);
+    expect(connector.parent).toBe(renderer.contentLayer);
+    // 同一帧内撤销后再重做：删除队列中的旧外壳仍须正确处理，存活图元不被重复销毁。
+    store.undo();
+    store.redo();
+    renderer.renderFrame();
+    expect(a.parent).toBe(renderer.contentLayer);
+    expect(connector.parent).toBe(renderer.contentLayer);
+    renderer.destroy();
+    engine.destroy();
+  });
+
   it('子节点挂在父节点的子容器中，旋转容器内子节点的场景包围盒与内核世界包围盒一致', () => {
     const engine = new SkyNoteEngine();
     const store = engine.documentStore;

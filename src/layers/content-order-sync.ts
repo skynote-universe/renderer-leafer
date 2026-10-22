@@ -6,10 +6,10 @@
  * 每个容器 (根内容层或某节点的子容器) 只排序自己的直接子图元；图元当前挂在哪个容器即其 group.parent。
  *
  * 设计考量 (Why):
- * 1. 平移时只插入：新进入视野的实体按比较器二分定位后 addAt 插入所在容器，已挂载实体不动；
- *    Leafer 每次 add/addAt 都是摘下再插入，若每帧整体重挂上千个图元，结构开销会逼近整个帧预算。
+ * 1. 少量入场二分定位后插入，大批次先排序并与存活条目归并，避免逐项 splice 的平方搬移；
+ *    Leafer 每次 add/addAt 都会摘下再插入，小更新仅规划必要移动，大更新规划容器回写。
  * 2. 层级真正变化时才全量排序 (zIndex / parentId / 连线端点变化、实体增删替换)，
- *    并按容器以最长递增子序列求出最少需要移动的图元，单个节点调整层级只移动它自己。
+ *    按容器以最长递增子序列求出必要移动数，整帧统一拆装所选子树并集，避免嵌套更新重复访问后代。
  * 3. 容器内的子图元全部是被跟踪的条目 (节点外层组、连线组)，有序列表下标即 children 下标。
  */
 
@@ -18,8 +18,19 @@ import type { EntityReader } from '@skynote/core';
 import { compareContentLayerEntries, type ContentLayerOrderEntry } from '../layering/content-layer-order';
 import type { NodeLayer } from './node-layer';
 import type { ConnectorLayer } from './connector-layer';
+import { withDetachedBranches } from './scene-subtree-mutation';
+import type { SceneChildrenChange } from './scene-subtree-mutation';
 
 type OrderEntry = ContentLayerOrderEntry<Group>;
+
+interface OrderPlan {
+  roots: Group[];
+  changes: Map<Group, SceneChildrenChange>;
+  moves: { container: Group; group: Group; next: Group | null }[];
+}
+
+// 小更新只移动必要图元；限制逐项插入/移位数量，宽容器的大批次改走排序合并与一次回写。
+const MAX_INCREMENTAL_MOVES = 8;
 
 /** 最长递增子序列 (返回构成子序列的下标)，O(n log n) */
 function longestIncreasingSubsequence(values: readonly number[]): Set<number> {
@@ -54,15 +65,17 @@ export class ContentOrderSync {
   ) {}
 
   /**
-   * @param fullResort 文档层级发生变化时为 true：全量排序并最少移动；否则只为新挂载或换挂容器的实体定位插入
+   * @param fullResort 文档层级变化时全量排序；否则增量插入或批次归并，按必要移动数选择回写策略
    */
   sync(fullResort: boolean): void {
+    const plan: OrderPlan = { roots: [], changes: new Map(), moves: [] };
     if (fullResort) {
       const buckets = this.collectShownEntries(null);
       for (const [container, entries] of buckets) {
         entries.sort(compareContentLayerEntries);
-        this.applyMinimalMoves(container, entries);
+        this.applyOrder(container, entries, plan);
       }
+      this.applyPlan(plan);
       this.sortedByContainer = buckets;
       return;
     }
@@ -85,6 +98,21 @@ export class ContentOrderSync {
         sorted = [];
         this.sortedByContainer.set(container, sorted);
       }
+      if (entries.length > MAX_INCREMENTAL_MOVES) {
+        entries.sort(compareContentLayerEntries);
+        const merged: OrderEntry[] = [];
+        let existing = 0;
+        let added = 0;
+        while (existing < sorted.length && added < entries.length) {
+          if (compareContentLayerEntries(sorted[existing], entries[added]) <= 0) merged.push(sorted[existing++]);
+          else merged.push(entries[added++]);
+        }
+        while (existing < sorted.length) merged.push(sorted[existing++]);
+        while (added < entries.length) merged.push(entries[added++]);
+        this.sortedByContainer.set(container, merged);
+        this.applyOrder(container, merged, plan);
+        continue;
+      }
       for (const entry of entries) {
         let low = 0;
         let high = sorted.length;
@@ -93,11 +121,11 @@ export class ContentOrderSync {
           if (compareContentLayerEntries(sorted[mid], entry) <= 0) low = mid + 1;
           else high = mid;
         }
-        // 新图元此前由图层追加在容器末尾，addAt 将其移至有序位置，不触碰其他图元
         sorted.splice(low, 0, entry);
-        container.addAt(entry.group, low);
       }
+      this.applyOrder(container, sorted, plan);
     }
+    this.applyPlan(plan);
   }
 
   private isStillShown(entry: OrderEntry): boolean {
@@ -137,26 +165,45 @@ export class ContentOrderSync {
   }
 
   /**
-   * 只移动不在最长递增子序列中的图元：自上而下逐个插到其后继之前，其余图元保持不动
+   * 先规划所有容器：小更新仅选择LIS以外的图元，大更新选择容器，最后统一拆装子树并集。
    */
-  private applyMinimalMoves(container: Group, entries: readonly OrderEntry[]): void {
+  private applyOrder(container: Group, entries: readonly OrderEntry[], plan: OrderPlan): void {
     const currentIndex = new Map<Group, number>();
     const children = container.children;
     for (let i = 0; i < children.length; i++) {
       currentIndex.set(children[i] as Group, i);
     }
     const stable = longestIncreasingSubsequence(entries.map((entry) => currentIndex.get(entry.group) ?? -1));
+    if (entries.length === stable.size) return;
+    plan.changes.set(container, { ordered: entries.map((entry) => entry.group) });
+    if (entries.length - stable.size > MAX_INCREMENTAL_MOVES) {
+      plan.roots.push(container);
+      return;
+    }
 
     for (let i = entries.length - 1; i >= 0; i--) {
       if (stable.has(i)) continue;
       const group = entries[i].group;
-      group.remove();
       const next = i + 1 < entries.length ? entries[i + 1].group : null;
-      if (next) {
-        container.addAt(group, container.children.indexOf(next));
-      } else {
-        container.add(group);
-      }
+      plan.roots.push(group);
+      plan.moves.push({ container, group, next });
     }
+  }
+
+  private applyPlan(plan: OrderPlan): void {
+    if (!plan.roots.length) return;
+    withDetachedBranches(
+      plan.roots,
+      (detachedParents) => {
+        for (const { container, group, next } of plan.moves) {
+          // 已被祖先选中的父容器通过顺序计划恢复；此时兄弟分支已摘下，不能再依赖其下标。
+          if (detachedParents.has(container)) continue;
+          group.remove();
+          if (next) container.addAt(group, container.children.indexOf(next));
+          else container.add(group);
+        }
+      },
+      plan.changes
+    );
   }
 }

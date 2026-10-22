@@ -17,6 +17,7 @@ import { ConnectorView } from '../connector/connector-view';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 
 import { VisibilityTracker } from './visibility-tracker';
+import { detachSceneGroups, mountSceneGroups } from './scene-subtree-mutation';
 
 export interface ConnectorLayerOptions {
   engine: SkyNoteEngine;
@@ -84,6 +85,7 @@ export class ConnectorLayer {
     const { engine } = this.options;
     const shown = this.visibility.shownIds;
     const result: LayerSyncResult = { entered: 0, enterMs: 0, left: 0 };
+    const mounts = new Map<Group, Group>();
 
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
@@ -100,6 +102,7 @@ export class ConnectorLayer {
       const { containerId } = this.getPlacement(connectorId)!;
       const container = resolveContainer(containerId);
       let view = this.views.get(connectorId);
+      const created = !view;
       if (!view) {
         view = new ConnectorView(this.options.mapper);
         this.views.set(connectorId, view);
@@ -113,7 +116,10 @@ export class ConnectorLayer {
         editing: textEditing?.kind === 'connector' && textEditing.id === connectorId ? textEditing : null,
         fonts: engine.documentStore.fonts
       });
-      if (view.group.parent !== container) container.add(view.group);
+      if (view.group.parent !== container) {
+        if (created) container.add(view.group);
+        else mounts.set(view.group, container);
+      }
       view.setContainerTransform(containerId === undefined ? null : engine.entityStore.getWorldTransform(containerId)!);
 
       this.visibility.markShown(connectorId);
@@ -122,10 +128,18 @@ export class ConnectorLayer {
         result.entered++;
       }
     }
+    const mountStart = result.entered ? performance.now() : 0;
+    mountSceneGroups(mounts);
+    if (result.entered) result.enterMs += performance.now() - mountStart;
     this.visibility.endFrame(
-      (connectorId) => {
-        this.views.get(connectorId)?.group.remove();
-        result.left++;
+      (connectorIds) => {
+        const groups: Group[] = [];
+        for (const id of connectorIds) {
+          const view = this.views.get(id);
+          if (view) groups.push(view.group);
+        }
+        detachSceneGroups(groups);
+        result.left += connectorIds.length;
       },
       (connectorId) => this.destroy(connectorId)
     );
@@ -139,9 +153,19 @@ export class ConnectorLayer {
     this.views.delete(connectorId);
   }
 
-  destroyAll(): void {
-    for (const connectorId of [...this.views.keys()]) {
-      this.destroy(connectorId);
+  /** 先批量摘除挂载图元，再释放各视图，避免同父连线逐条销毁时反复搬移兄弟数组。 */
+  destroyMany(connectorIds: Iterable<string>): void {
+    const ids = [...new Set(connectorIds)];
+    const groups: Group[] = [];
+    for (const id of ids) {
+      const view = this.views.get(id);
+      if (view) groups.push(view.group);
     }
+    detachSceneGroups(groups);
+    for (const id of ids) this.destroy(id);
+  }
+
+  destroyAll(): void {
+    this.destroyMany(this.views.keys());
   }
 }

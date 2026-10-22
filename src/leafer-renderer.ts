@@ -226,9 +226,9 @@ export class LeaferRenderer implements CanvasRenderer {
     const { engine, nodeLayer, connectorLayer } = this;
     const { entityStore, session } = engine;
 
-    for (const id of this.pendingRemovedNodeIds) nodeLayer.destroy(id);
+    if (this.pendingRemovedNodeIds.size) nodeLayer.destroyMany(this.pendingRemovedNodeIds);
     this.pendingRemovedNodeIds.clear();
-    for (const id of this.pendingRemovedConnectorIds) connectorLayer.destroy(id);
+    if (this.pendingRemovedConnectorIds.size) connectorLayer.destroyMany(this.pendingRemovedConnectorIds);
     this.pendingRemovedConnectorIds.clear();
 
     const frustum = expandBounds(computeViewportWorldBounds(session.viewport, session.viewportSize), FRUSTUM_PADDING);

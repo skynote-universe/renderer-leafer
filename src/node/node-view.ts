@@ -13,6 +13,7 @@
  */
 
 import { Box, Group } from 'leafer';
+import { withDetachedBranches } from '../layers/scene-subtree-mutation';
 import type {
   CanvasPrimitive,
   CanvasTheme,
@@ -22,7 +23,13 @@ import type {
   NodeTypeRegistry,
   TextEditingTarget
 } from '@skynote/core';
-import { applyThemeToPrimitives, computeNodeLocalMatrix, editingTextPrimitive, resolveThemeColor } from '@skynote/core';
+import {
+  applyThemeToPrimitives,
+  computeNodeLocalMatrix,
+  editingTextPrimitive,
+  resolveNodeStyle,
+  resolveThemeColor
+} from '@skynote/core';
 import type { LeaferRenderContext, LeaferShape } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
@@ -67,8 +74,14 @@ export class NodeView {
     node: Readonly<NodeEntity>
   ) {
     this.node = node;
-    this.content = env.nodeTypes.get(node.nodeType)?.clipContent
-      ? new Box({ width: node.width, height: node.height, overflow: 'hide' })
+    const def = env.nodeTypes.get(node.nodeType);
+    this.content = def?.clipContent
+      ? new Box({
+          width: node.width,
+          height: node.height,
+          overflow: 'hide',
+          cornerRadius: resolveNodeStyle(node, def).radius
+        })
       : new Group();
     this.group.add(this.content);
   }
@@ -84,8 +97,14 @@ export class NodeView {
    */
   get children(): Group {
     if (!this.childrenGroup) {
-      this.childrenGroup = this.env.nodeTypes.get(this.node.nodeType)?.clipChildren
-        ? new Box({ width: this.node.width, height: this.node.height, overflow: 'hide' })
+      const def = this.env.nodeTypes.get(this.node.nodeType);
+      this.childrenGroup = def?.clipChildren
+        ? new Box({
+            width: this.node.width,
+            height: this.node.height,
+            overflow: 'hide',
+            cornerRadius: resolveNodeStyle(this.node, def).radius
+          })
         : new Group();
       this.group.add(this.childrenGroup);
     }
@@ -121,6 +140,10 @@ export class NodeView {
     ) {
       return;
     }
+    const def = this.env.nodeTypes.get(node.nodeType);
+    const cornerRadius = resolveNodeStyle(node, def).radius;
+    if (this.childrenGroup instanceof Box) this.childrenGroup.set({ cornerRadius });
+    if (this.content instanceof Box) this.content.set({ cornerRadius });
     this.editing = editing;
     this.dataVersion = versions.dataVersion;
     this.contentWidth = node.width;
@@ -137,6 +160,12 @@ export class NodeView {
 
   /** 释放图元；原生渲染器的资源成对 destroy */
   destroy(): void {
+    // 子容器只承载节点/连线图层各自拥有的图元。先摘下它们，避免 Leafer 递归销毁解组后仍存活或离屏缓存中的视图。
+    if (this.childrenGroup?.children.length) {
+      const container = this.childrenGroup;
+      const children = new Set(container.children as Group[]);
+      withDetachedBranches([container], () => container.removeAll(), new Map([[container, { removed: children }]]));
+    }
     if (this.detail === 'full') this.env.renderers.get(this.node.nodeType)?.destroy?.(this.shapes, this.node);
     this.group.destroy();
   }

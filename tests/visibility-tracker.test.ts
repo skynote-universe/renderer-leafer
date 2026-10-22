@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { VisibilityTracker } from '../src/layers/visibility-tracker';
 
 function runFrame(tracker: VisibilityTracker, visible: string[]) {
@@ -11,13 +11,35 @@ function runFrame(tracker: VisibilityTracker, visible: string[]) {
     tracker.markShown(id);
   }
   tracker.endFrame(
-    (id) => hidden.push(id),
+    (ids) => hidden.push(...ids),
     (id) => evicted.push(id)
   );
   return { entered, hidden, evicted };
 }
 
 describe('VisibilityTracker', () => {
+  it('离场一次通知整批且先于LRU淘汰，空闲帧不通知', () => {
+    const tracker = new VisibilityTracker(1, true);
+    runFrame(tracker, ['parent', 'child', 'leaf']);
+    tracker.beginFrame();
+    const events: string[] = [];
+    const hide = vi.fn((ids: readonly string[]) => events.push(`hide:${ids.join(',')}`));
+    tracker.endFrame(hide, (id) => events.push(`evict:${id}`));
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(['hide:leaf,child,parent', 'evict:parent', 'evict:child']);
+    tracker.beginFrame();
+    tracker.endFrame(hide, () => {});
+    expect(hide).toHaveBeenCalledTimes(1);
+  });
+  it('节点可按后代优先摘除，LRU仍按原离场顺序淘汰', () => {
+    const tracker = new VisibilityTracker(1, true);
+    runFrame(tracker, ['parent', 'child', 'leaf']);
+    expect(runFrame(tracker, [])).toEqual({
+      entered: [],
+      hidden: ['leaf', 'child', 'parent'],
+      evicted: ['parent', 'child']
+    });
+  });
   it('按帧差集报告进入与离开视野的实体，离屏超额时按最早离开者优先淘汰', () => {
     const tracker = new VisibilityTracker(2);
 

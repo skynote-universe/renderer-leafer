@@ -5,11 +5,13 @@
 
 import type { Group } from 'leafer';
 import { isNodeHiddenByOpacity, type SkyNoteEngine } from '@skynote/core';
+import type { RuntimeNodeView } from '@skynote/core';
 import type { LayerSyncResult, LeaferRenderContext } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 import { NodeView, type NodeRenderDetail, type NodeViewEnvironment } from '../node/node-view';
 import { VisibilityTracker } from './visibility-tracker';
+import { detachSceneGroups, mountSceneGroups, withDetachedBranches } from './scene-subtree-mutation';
 
 export interface NodeLayerOptions {
   contentLayer: Group;
@@ -24,6 +26,8 @@ interface NodeFrame {
   readonly context: LeaferRenderContext;
   readonly detail: NodeRenderDetail;
   readonly result: LayerSyncResult;
+  readonly pending: RuntimeNodeView[];
+  readonly mounts: Map<Group, Group>;
 }
 
 export class NodeLayer {
@@ -55,7 +59,7 @@ export class NodeLayer {
   private readonly env: NodeViewEnvironment;
 
   constructor(private readonly options: NodeLayerOptions) {
-    this.visibility = new VisibilityTracker(options.offscreenCacheLimit);
+    this.visibility = new VisibilityTracker(options.offscreenCacheLimit, true);
     this.env = { nodeTypes: options.engine.nodeTypes, renderers: options.renderers, mapper: options.mapper };
   }
 
@@ -92,7 +96,13 @@ export class NodeLayer {
     containerIds: Iterable<string>
   ): LayerSyncResult {
     const { entityStore } = this.options.engine;
-    const frame: NodeFrame = { context, detail, result: { entered: 0, enterMs: 0, left: 0 } };
+    const frame: NodeFrame = {
+      context,
+      detail,
+      result: { entered: 0, enterMs: 0, left: 0 },
+      pending: [],
+      mounts: new Map()
+    };
 
     this.visibility.beginFrame();
     for (let i = 0; i < visibleIds.length; i++) {
@@ -103,10 +113,18 @@ export class NodeLayer {
       this.show(nodeId, frame);
     }
     for (const containerId of containerIds) this.show(containerId, frame);
+    const mountStart = frame.result.entered ? performance.now() : 0;
+    mountSceneGroups(frame.mounts);
+    if (frame.result.entered) frame.result.enterMs += performance.now() - mountStart;
     this.visibility.endFrame(
-      (nodeId) => {
-        this.views.get(nodeId)?.group.remove();
-        frame.result.left++;
+      (nodeIds) => {
+        const groups: Group[] = [];
+        for (const id of nodeIds) {
+          const view = this.views.get(id);
+          if (view) groups.push(view.group);
+        }
+        detachSceneGroups(groups);
+        frame.result.left += nodeIds.length;
       },
       (nodeId) => this.destroy(nodeId)
     );
@@ -121,16 +139,57 @@ export class NodeLayer {
   }
 
   destroyAll(): void {
-    for (const nodeId of [...this.views.keys()]) this.destroy(nodeId);
+    this.destroyMany(this.views.keys());
   }
 
-  /** 挂载单个节点 (先递归挂载祖先)；节点不存在时返回 undefined */
+  /** 删除集合按实际场景父链后代优先，避免逐祖先拆装同一子树导致平方开销。 */
+  destroyMany(nodeIds: Iterable<string>): void {
+    const depths = new Map<Group, number>();
+    const entries: { id: string; depth: number }[] = [];
+    for (const id of nodeIds) {
+      const view = this.views.get(id);
+      if (!view) continue;
+      const path: Group[] = [];
+      let current: Group | undefined = view.group;
+      while (current && !depths.has(current)) {
+        path.push(current);
+        current = current.parent as Group | undefined;
+      }
+      let depth = current ? depths.get(current)! : -1;
+      for (let i = path.length - 1; i >= 0; i--) depths.set(path[i], ++depth);
+      entries.push({ id, depth: depths.get(view.group)! });
+    }
+    entries.sort((a, b) => b.depth - a.depth);
+    detachSceneGroups(entries.map(({ id }) => this.views.get(id)!.group));
+    for (const { id } of entries) this.destroy(id);
+  }
+
+  /** 共享已标记祖先，反向挂载未就绪父链；深层离屏祖先不消耗调用栈。 */
   private show(nodeId: string, frame: NodeFrame): NodeView | undefined {
     if (this.visibility.isMarked(nodeId)) return this.views.get(nodeId);
-    const runtimeNode = this.options.engine.entityStore.getNode(nodeId);
-    if (!runtimeNode) return undefined;
+    const pending = frame.pending;
+    let current: string | undefined = nodeId;
+    while (current !== undefined && !this.visibility.isMarked(current)) {
+      const runtimeNode = this.options.engine.entityStore.getNode(current);
+      if (!runtimeNode) {
+        current = undefined;
+        break;
+      }
+      pending.push(runtimeNode);
+      current = runtimeNode.entity.parentId;
+    }
+    let parentView = current === undefined ? undefined : this.views.get(current);
+    for (let i = pending.length - 1; i >= 0; i--) {
+      parentView = this.mount(pending[i], parentView, frame);
+    }
+    const view = pending.length ? parentView : undefined;
+    pending.length = 0;
+    return view;
+  }
 
+  private mount(runtimeNode: RuntimeNodeView, parentView: NodeView | undefined, frame: NodeFrame): NodeView {
     const node = runtimeNode.entity;
+    const nodeId = node.id;
     if (this.nodeAssets.get(nodeId)?.version !== runtimeNode.runtime.dataVersion) {
       this.releaseAssetIndex(nodeId);
       let ids: readonly string[] = [];
@@ -149,19 +208,22 @@ export class NodeLayer {
         nodes.add(nodeId);
       }
     }
-    const parentView = node.parentId === undefined ? undefined : this.show(node.parentId, frame);
     const container = parentView ? parentView.children : this.options.contentLayer;
     const entering = !this.visibility.shownIds.has(nodeId);
     const start = entering ? performance.now() : 0;
 
     let view = this.views.get(nodeId);
+    const created = !view;
     if (!view) {
       view = new NodeView(this.env, node);
       this.views.set(nodeId, view);
     }
     view.update(node, runtimeNode.runtime, frame.context, frame.detail);
     // 改挂容器或父容器被删除 (子节点回落根层级) 时换挂，层级由 ContentOrderSync 重新定位
-    if (view.group.parent !== container) container.add(view.group);
+    if (view.group.parent !== container) {
+      if (created) withDetachedBranches([view.group], () => container.add(view.group));
+      else frame.mounts.set(view.group, container);
+    }
 
     this.visibility.markShown(nodeId);
     if (entering) {
