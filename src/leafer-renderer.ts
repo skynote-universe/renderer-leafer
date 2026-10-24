@@ -185,6 +185,26 @@ export class LeaferRenderer implements CanvasRenderer {
     });
     this.resizeObserver.observe(container);
 
+    // 未固定像素比时跟随设备像素比变化 (浏览器缩放、窗口移到缩放比例不同的屏幕)，否则画面发虚或只绘出一部分：
+    // Leafer 自带的跟随在显式配置像素比时关闭，且只在 window resize 时检查 (换屏不一定触发)，这里用 matchMedia 监听当前像素比失配
+    if (options?.pixelRatio === undefined) {
+      let query: MediaQueryList;
+      const onPixelRatioChange = (): void => {
+        this.leafer.resize({
+          width: container.clientWidth,
+          height: container.clientHeight,
+          pixelRatio: window.devicePixelRatio
+        });
+        watchPixelRatio();
+      };
+      const watchPixelRatio = (): void => {
+        query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+        query.addEventListener('change', onPixelRatioChange, { once: true });
+      };
+      watchPixelRatio();
+      this.disposers.push(() => query.removeEventListener('change', onPixelRatioChange));
+    }
+
     this.renderFrame();
   }
 

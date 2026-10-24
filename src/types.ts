@@ -49,7 +49,7 @@ export interface ImageFailureAppearance {
 export interface LeaferRendererOptions {
   /** 宿主提供的失败展示资源；不登记为文档资产，失败时退回内置文字。 */
   imageFailure?: ImageFailureAppearance;
-  /** 设备像素比 (默认读取 window.devicePixelRatio) */
+  /** 固定的设备像素比；缺省时跟随 window.devicePixelRatio 及其变化 (浏览器缩放、换屏) */
   pixelRatio?: number;
   /** 分帧调度 (默认开启) */
   enableFrameScheduler?: boolean;

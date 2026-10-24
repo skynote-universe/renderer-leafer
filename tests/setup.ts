@@ -122,3 +122,11 @@ if (typeof (globalThis as any).cancelAnimationFrame === 'undefined') {
 if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
+if (typeof (globalThis as any).matchMedia === 'undefined') {
+  (globalThis as any).matchMedia = (media: string) => ({
+    media,
+    matches: true,
+    addEventListener() {},
+    removeEventListener() {}
+  });
+}
