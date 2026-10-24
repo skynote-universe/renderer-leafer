@@ -1,5 +1,5 @@
 import './setup';
-import { Group, Rect } from 'leafer';
+import { Group, Rect } from 'leafer-ui';
 import { expect, it, vi } from 'vitest';
 import { SkyNoteEngine, createEmptyCanvasDocument, generateNKeysBetween } from '@skynote/core';
 import type { CanvasPatch } from '@skynote/core';

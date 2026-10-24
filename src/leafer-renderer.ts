@@ -11,7 +11,7 @@
  * 4. 像素对齐：开启 Leafer 画布的 pixelSnap，绘制时按屏幕像素对齐，1px 线条在任意缩放下都锐利。
  */
 
-import { Leafer, Group } from 'leafer';
+import { Leafer, Group } from 'leafer-ui';
 import type { CanvasRenderer, SkyNoteEngine } from '@skynote/core';
 import { computeViewportWorldBounds, expandBounds } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';

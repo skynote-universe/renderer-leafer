@@ -13,7 +13,7 @@
  * 3. 容器内的子图元全部是被跟踪的条目 (节点外层组、连线组)，有序列表下标即 children 下标。
  */
 
-import type { Group } from 'leafer';
+import type { Group } from 'leafer-ui';
 import type { EntityReader } from '@skynote/core';
 import { compareContentLayerEntries, type ContentLayerOrderEntry } from '../layering/content-layer-order';
 import type { NodeLayer } from './node-layer';

@@ -6,8 +6,8 @@
  * 图片二进制由宿主适配器持有；视图只在可见期间解析显示地址，并在节点离开渲染缓存时释放。
  */
 
-import { Rect, Text } from 'leafer';
-import type { IUIInputData } from 'leafer';
+import { Rect, Text } from 'leafer-ui';
+import type { IUIInputData } from 'leafer-ui';
 import type { AssetAdapter, ImageLoadingController, ImageLoadState, NodeEntity, NodeFill } from '@skynote/core';
 import { resolveThemeColor } from '@skynote/core';
 import type { LeaferNodeLifecycleRenderer } from '../registry/leafer-node-renderer-registry';

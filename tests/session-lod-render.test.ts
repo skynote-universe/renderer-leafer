@@ -1,6 +1,6 @@
 import './setup';
 import { describe, it, expect, vi } from 'vitest';
-import { Rect } from 'leafer';
+import { Rect } from 'leafer-ui';
 import { SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import type { FrameCommitScheduler } from '../src/scheduler/frame-commit-scheduler';

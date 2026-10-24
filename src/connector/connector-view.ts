@@ -25,7 +25,7 @@ import type {
   TextEditingTarget
 } from '@skynote/core';
 import { applyThemeToPrimitives, displayedConnectorLabel, invertMatrix, resolveThemeColor } from '@skynote/core';
-import { Group, Line, Path } from 'leafer';
+import { Group, Line, Path } from 'leafer-ui';
 import { toLeaferStrokeCap, type PrimitiveMapper } from '../primitives/primitive-mapper';
 import type { LeaferShape } from '../types';
 

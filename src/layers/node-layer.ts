@@ -3,7 +3,7 @@
  * @description 节点图层：维护视锥内节点的 NodeView，挂载到父容器 (ADR-114)，摘除离屏者并按 LRU 淘汰
  */
 
-import type { Group } from 'leafer';
+import type { Group } from 'leafer-ui';
 import { isNodeHiddenByOpacity, type SkyNoteEngine } from '@skynote/core';
 import type { RuntimeNodeView } from '@skynote/core';
 import type { LayerSyncResult, LeaferRenderContext } from '../types';

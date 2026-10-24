@@ -12,7 +12,7 @@
  *    实际包围盒而非节点宽高，子节点拖出容器时旋转容器的中心随之漂移，容器与子节点都会错位。
  */
 
-import { Box, Group } from 'leafer';
+import { Box, Group } from 'leafer-ui';
 import { withDetachedBranches } from '../layers/scene-subtree-mutation';
 import type {
   CanvasPrimitive,

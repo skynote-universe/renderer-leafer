@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CanvasPrimitive } from '@skynote/core';
-import type { Text } from 'leafer';
+import type { Text } from 'leafer-ui';
 
 // 注入 Node 环境下缺失的 Canvas 全局变量，使 Leafer 在非浏览器环境中安全初始化
 if (typeof globalThis.CanvasRenderingContext2D === 'undefined') {
@@ -62,7 +62,7 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
 
-const { Group, Rect, Box, Image, Path } = await import('leafer');
+const { Group, Rect, Box, Image, Path } = await import('leafer-ui');
 type TextShape = Text;
 type RectShape = InstanceType<typeof Rect>;
 const { PrimitiveMapper } = await import('../src/primitives/primitive-mapper');

@@ -2,7 +2,7 @@ import './setup';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
 import type { AssetAdapter, NodeEntity } from '@skynote/core';
-import type { Rect, Text } from 'leafer';
+import type { Rect, Text } from 'leafer-ui';
 import { ImageNodeRenderer } from '../src/node/image-node-renderer';
 import { LeaferRenderer } from '../src/leafer-renderer';
 

@@ -1,7 +1,7 @@
 import './setup';
 import { describe, it, expect, vi } from 'vitest';
 import { SkyNoteEngine } from '@skynote/core';
-import { Rect, Line } from 'leafer';
+import { Rect, Line } from 'leafer-ui';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';
 import type { LeaferRendererOptions } from '../src/types';

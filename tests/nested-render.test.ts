@@ -1,6 +1,6 @@
 import './setup';
 import { describe, it, expect } from 'vitest';
-import { Box, type Group } from 'leafer';
+import { Box, type Group } from 'leafer-ui';
 import { SkyNoteEngine } from '@skynote/core';
 import type { ConnectorEntity, NodeEntity, RectBounds } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';

@@ -23,8 +23,8 @@ import {
   type TextFragment,
   type TextPrimitive
 } from '@skynote/core';
-import { Box, Ellipse, Group, Image, Line, Path, Polygon, Rect, Text } from 'leafer';
-import type { ISolidPaint, IUIInputData } from 'leafer';
+import { Box, Ellipse, Group, Image, Line, Path, Polygon, Rect, Text } from 'leafer-ui';
+import type { ISolidPaint, IUIInputData } from 'leafer-ui';
 import type { LeaferShape } from '../types';
 import { toLeaferFontWeight } from '../text/leafer-font-measurer';
 

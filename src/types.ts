@@ -4,7 +4,7 @@
  */
 
 import type { CanvasTheme, NodeEntity, TextEditingTarget, ViewportState } from '@skynote/core';
-import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer';
+import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer-ui';
 
 /** 渲染器使用的 Leafer 图元 */
 export type LeaferShape = Group | Rect | Ellipse | Polygon | Path | Line | Text | Box | Image;

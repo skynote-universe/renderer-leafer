@@ -9,7 +9,7 @@
  *    实现简单且内存有界。
  */
 
-import { Platform } from 'leafer';
+import { Platform } from 'leafer-ui';
 import type { FontMeasurer, FontSpec, FontWeight } from '@skynote/core';
 
 const CACHE_LIMIT = 20000;

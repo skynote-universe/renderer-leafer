@@ -1,4 +1,4 @@
-import type { Group } from 'leafer';
+import type { Group } from 'leafer-ui';
 
 export type SceneChildrenChange = { readonly removed: ReadonlySet<Group> } | { readonly ordered: Group['children'] };
 

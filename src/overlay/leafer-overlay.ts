@@ -15,7 +15,7 @@ import {
   type OverlayChannel,
   type OverlayOptions
 } from '@skynote/core';
-import { Group } from 'leafer';
+import { Group } from 'leafer-ui';
 import type { LeaferShape } from '../types';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 

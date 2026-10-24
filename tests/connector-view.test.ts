@@ -92,7 +92,7 @@ if (typeof (globalThis as any).devicePixelRatio === 'undefined') {
   (globalThis as any).devicePixelRatio = 1;
 }
 
-const { Path } = await import('leafer');
+const { Path } = await import('leafer-ui');
 const { ConnectorView } = await import('../src/connector/connector-view');
 const { PrimitiveMapper } = await import('../src/primitives/primitive-mapper');
 const fonts = { measureWidth: (text: string, font: { size: number }) => [...text].length * font.size * 0.5 };

@@ -2,7 +2,7 @@ import './setup';
 import { describe, it, expect } from 'vitest';
 import { SkyNoteEngine, createSimpleTextBlock } from '@skynote/core';
 import type { NodeEntity } from '@skynote/core';
-import { Platform } from 'leafer';
+import { Platform } from 'leafer-ui';
 import { LeaferFontMeasurer, toLeaferFont } from '../src/text/leafer-font-measurer';
 
 describe('LeaferFontMeasurer', () => {

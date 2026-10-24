@@ -1,6 +1,6 @@
 import './setup';
 import { describe, it, expect } from 'vitest';
-import type { Group } from 'leafer';
+import type { Group } from 'leafer-ui';
 import { SkyNoteEngine, compareHierarchicalNodes } from '@skynote/core';
 import type { ConnectorEntity, NodeEntity } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';

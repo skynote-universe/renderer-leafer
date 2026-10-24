@@ -9,7 +9,7 @@
  *    容器移动时路由本就会重算，无需把路由点换算到各容器的局部坐标。
  */
 
-import type { Group } from 'leafer';
+import type { Group } from 'leafer-ui';
 import type { SkyNoteEngine, CanvasTheme, NodeEntity, TextEditingTarget } from '@skynote/core';
 import { resolveConnectorLayerPlacement, resolveConnectorStyle, type ConnectorLayerPlacement } from '@skynote/core';
 import type { LayerSyncResult } from '../types';

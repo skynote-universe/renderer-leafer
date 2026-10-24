@@ -1,6 +1,6 @@
 import './setup';
 import { expect, it, vi } from 'vitest';
-import { Group } from 'leafer';
+import { Group } from 'leafer-ui';
 import { SkyNoteEngine, createEmptyCanvasDocument } from '@skynote/core';
 import { LeaferRenderer } from '../src/leafer-renderer';
 import type { NodeLayer } from '../src/layers/node-layer';

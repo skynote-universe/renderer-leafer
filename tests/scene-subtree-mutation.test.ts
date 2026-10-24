@@ -1,5 +1,5 @@
 import './setup';
-import { Group, Rect } from 'leafer';
+import { Group, Rect } from 'leafer-ui';
 import { expect, it, vi } from 'vitest';
 import { withDetachedBranches } from '../src/layers/scene-subtree-mutation';
 import type { SceneChildrenChange } from '../src/layers/scene-subtree-mutation';
