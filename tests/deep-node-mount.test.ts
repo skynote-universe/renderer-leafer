@@ -5,51 +5,58 @@ import { LeaferRenderer } from '../src/leafer-renderer';
 import type { NodeLayer } from '../src/layers/node-layer';
 import { NodeView } from '../src/node/node-view';
 
-it.each([0, 12000])('12000层离屏祖先初始化、刷新、离场和销毁不溢出，缓存=%s', (offscreenCacheLimit) => {
-  const doc = createEmptyCanvasDocument();
-  for (let i = 0; i < 12000; i++)
-    doc.content.nodes[`n${i}`] = {
-      id: `n${i}`,
-      type: 'node',
-      nodeType: 'rect',
-      x: i === 0 ? -1000 : i === 11999 ? 1000 : 0,
-      y: 0,
-      width: 10,
-      height: 10,
-      rotation: 0,
-      zIndex: 'a0',
-      locked: false,
-      ...(i ? { parentId: `n${i - 1}` } : {})
-    };
-  expect(parseCanvasDocument(JSON.parse(JSON.stringify(doc))).ok).toBe(true);
-  const engine = new SkyNoteEngine({ initialDoc: doc });
-  expect(engine.spatialIndex.search({ left: 0, top: 0, right: 100, bottom: 100 })).toEqual(['n11999']);
-  let renderer: LeaferRenderer | undefined;
-  try {
-    renderer = new LeaferRenderer(engine, document.createElement('div'), {
-      enableFrameScheduler: false,
-      offscreenCacheLimit
-    });
-    const layer = (renderer as unknown as { nodeLayer: NodeLayer }).nodeLayer;
-    expect(layer.shownIds.size).toBe(12000);
-    for (let i = 1; i < 12000; i++)
-      expect(layer.getGroup(`n${i}`)!.parent).toBe(layer.getChildrenContainer(`n${i - 1}`));
-    renderer.renderFrame();
-    expect(layer.shownIds.size).toBe(12000);
-    const leaf = layer.getGroup('n11999');
-    engine.session.setViewport({ x: -10000, y: 0 });
-    renderer.renderFrame();
-    expect(layer.shownIds.size).toBe(0);
-    expect(layer.cacheCount).toBe(offscreenCacheLimit);
-    engine.session.setViewport({ x: 0, y: 0 });
-    renderer.renderFrame();
-    expect(layer.shownIds.size).toBe(12000);
-    if (offscreenCacheLimit) expect(layer.getGroup('n11999')).toBe(leaf);
-  } finally {
-    renderer?.destroy();
-    engine.destroy();
-  }
-});
+/** 12000 层压力测试校验不溢出、不泄漏，不是耗时预算；单独运行约 4 秒，多包并行时可能超过默认 5 秒 */
+const DEEP_TEST_TIMEOUT = 30_000;
+
+it.each([0, 12000])(
+  '12000层离屏祖先初始化、刷新、离场和销毁不溢出，缓存=%s',
+  (offscreenCacheLimit) => {
+    const doc = createEmptyCanvasDocument();
+    for (let i = 0; i < 12000; i++)
+      doc.content.nodes[`n${i}`] = {
+        id: `n${i}`,
+        type: 'node',
+        nodeType: 'rect',
+        x: i === 0 ? -1000 : i === 11999 ? 1000 : 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        rotation: 0,
+        zIndex: 'a0',
+        locked: false,
+        ...(i ? { parentId: `n${i - 1}` } : {})
+      };
+    expect(parseCanvasDocument(JSON.parse(JSON.stringify(doc))).ok).toBe(true);
+    const engine = new SkyNoteEngine({ initialDoc: doc });
+    expect(engine.spatialIndex.search({ left: 0, top: 0, right: 100, bottom: 100 })).toEqual(['n11999']);
+    let renderer: LeaferRenderer | undefined;
+    try {
+      renderer = new LeaferRenderer(engine, document.createElement('div'), {
+        enableFrameScheduler: false,
+        offscreenCacheLimit
+      });
+      const layer = (renderer as unknown as { nodeLayer: NodeLayer }).nodeLayer;
+      expect(layer.shownIds.size).toBe(12000);
+      for (let i = 1; i < 12000; i++)
+        expect(layer.getGroup(`n${i}`)!.parent).toBe(layer.getChildrenContainer(`n${i - 1}`));
+      renderer.renderFrame();
+      expect(layer.shownIds.size).toBe(12000);
+      const leaf = layer.getGroup('n11999');
+      engine.session.setViewport({ x: -10000, y: 0 });
+      renderer.renderFrame();
+      expect(layer.shownIds.size).toBe(0);
+      expect(layer.cacheCount).toBe(offscreenCacheLimit);
+      engine.session.setViewport({ x: 0, y: 0 });
+      renderer.renderFrame();
+      expect(layer.shownIds.size).toBe(12000);
+      if (offscreenCacheLimit) expect(layer.getGroup('n11999')).toBe(leaf);
+    } finally {
+      renderer?.destroy();
+      engine.destroy();
+    }
+  },
+  DEEP_TEST_TIMEOUT
+);
 
 it('共享离屏祖先每帧仅更新一次，改挂及父节点删除恢复保留存活图元', () => {
   const doc = createEmptyCanvasDocument();

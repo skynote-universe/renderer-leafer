@@ -12,6 +12,9 @@
  * 5. 像素对齐由 Leafer 画布的 pixelSnap 在绘制时按屏幕像素完成，这里保持世界坐标原值。
  */
 
+// 带透明度的纯色 (fillOpacity / strokeOpacity 映射为 { type: 'solid', color, opacity }) 需要颜色插件把字符串颜色解析为 RGBA；
+// leafer-ui 本体缺少它时会忽略透明度、整块画成不透明色 (如框选背景、半透明填充)
+import '@leafer-in/color';
 import {
   layoutText,
   type CanvasPrimitive,

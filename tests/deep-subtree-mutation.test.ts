@@ -38,6 +38,9 @@ it.each([200, 400])('%s层整树删除不逐祖先重复拆装后代', (depth) =
   }
 });
 
+/** 12000 层压力测试校验不溢出、不泄漏，不是耗时预算；单独运行约 4 秒，多包并行时可能超过默认 5 秒 */
+const DEEP_TEST_TIMEOUT = 30_000;
+
 it.each(['delete-tree', 'delete-shell', 'reparent', 'reorder'] as const)(
   '12000层已挂载子树%s及撤销重做不溢出',
   (mode) => {
@@ -125,5 +128,6 @@ it.each(['delete-tree', 'delete-shell', 'reparent', 'reorder'] as const)(
       renderer.destroy();
       engine.destroy();
     }
-  }
+  },
+  DEEP_TEST_TIMEOUT
 );
