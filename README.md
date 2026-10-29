@@ -57,3 +57,9 @@ editor.mount(document.getElementById('canvas')!);
 ## 许可证
 
 [MIT](./LICENSE)
+
+### 场景导出
+
+实现CanvasRenderer的通用可选`export(request)`协议，通过`exportFormats`声明`png`、`jpeg`、`webp`；请求`format`选择编码器，`quality`传给有损编码，结果返回实际MIME。格式不受Core枚举限制，由渲染器自行实现并校验；不支持的格式或浏览器静默回退PNG会明确拒绝。JPEG需要画布背景，透明背景请用PNG/WebP。SkyNoteEditor.exportPng仍是PNG便捷入口，委托通用协议并按声明的格式判断入口可用性。
+
+导出独立构建指定世界范围内的节点和连线，不复用当前视口的LOD/分帧/覆盖层；保持容器裁剪及派生连线。等待图片及纹理后编码，取消、失败或超时释放临时资源。当前栅格编码最大单边8192像素，总计16777216像素。有私有状态的自定义原生节点暂不支持独立导出，会明确报错，避免污染当前场景。

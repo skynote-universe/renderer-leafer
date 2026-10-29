@@ -12,7 +12,7 @@
  */
 
 import { Leafer, Group } from 'leafer-ui';
-import type { CanvasRenderer, SkyNoteEngine } from '@skynote/core';
+import type { CanvasRenderer, SkyNoteEngine, CanvasExportRequest, CanvasExportResult } from '@skynote/core';
 import { computeViewportWorldBounds, expandBounds } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';
 import { LeaferOverlay } from './overlay/leafer-overlay';
@@ -31,6 +31,7 @@ import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
 import { ContentOrderSync } from './layers/content-order-sync';
 import { ImageNodeRenderer } from './node/image-node-renderer';
+import { exportScene, LEAFER_EXPORT_FORMATS } from './export/scene-export';
 
 const OVERLAY_ESCAPE_SCOPE_ID = 'renderer:overlay-escape';
 const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
@@ -44,6 +45,7 @@ export class LeaferRenderer implements CanvasRenderer {
   /** 节点与连线按层级排列所在的内容层 */
   readonly contentLayer = new Group();
   readonly images: ImageNodeRenderer;
+  readonly exportFormats = LEAFER_EXPORT_FORMATS;
 
   private readonly leafer: Leafer;
   /** 承载视口变换的场景根 */
@@ -211,6 +213,12 @@ export class LeaferRenderer implements CanvasRenderer {
   /** 当前自适应 LOD 档位 */
   get lodLevel(): SkyNoteLodLevel {
     return this.currentLod;
+  }
+
+  /** 隔离导出不复用交互场景，格式由当前渲染器声明并处理。 */
+  async export(request: CanvasExportRequest): Promise<CanvasExportResult> {
+    if (this.isDestroyed) throw new Error('渲染器已销毁');
+    return exportScene(this.engine, this.nodeRenderers, request, this.images);
   }
 
   /** 申请在下一动画帧渲染：同一帧内的多次提交 (拖拽、滚轮连发) 只渲染一次 */
