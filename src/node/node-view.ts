@@ -20,6 +20,10 @@ import type {
   EntityVersions,
   NodeEntity,
   NodeFill,
+  NodeDataPaths,
+  NodeDataPath,
+  NodeCompositionPart,
+  NodeTypeDefinition,
   NodeTypeRegistry,
   TextEditingTarget
 } from '@skynote/core';
@@ -31,7 +35,10 @@ import {
   resolveThemeColor
 } from '@skynote/core';
 import type { LeaferRenderContext, LeaferShape } from '../types';
-import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
+import type {
+  LeaferNodeRendererRegistry,
+  LeaferNodeLifecycleRenderer
+} from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 
 /** 本帧要求的节点细节档位 */
@@ -51,12 +58,17 @@ function resolveNodeFill(fill: NodeFill | undefined, theme: CanvasTheme, fallbac
 }
 
 export class NodeView {
+  /** 创建视图时的类型不能随实体字段原位更新而改变。 */
+  readonly nodeType: string;
+  readonly definition: NodeTypeDefinition | undefined;
   /** 外层图元：承载节点变换，挂在父容器的子容器 (或根内容层) 中 */
   readonly group = new Group();
   /** 内容图元的容器；裁剪型节点为随外框同步尺寸的 Box */
   private readonly content: Group;
   private childrenGroup: Group | null = null;
   private shapes: LeaferShape[] = [];
+  private nativeRenderer: LeaferNodeLifecycleRenderer | null = null;
+  private nativeNode: Readonly<NodeEntity> | null = null;
   private node: Readonly<NodeEntity>;
   private geomVersion = -1;
   private dataVersion = -1;
@@ -68,13 +80,32 @@ export class NodeView {
   private editing: TextEditingTarget | null = null;
   /** 当前内容档位；broken 为渲染崩溃后的降级占位框 */
   private detail: NodeRenderDetail | 'broken' | null = null;
+  private readonly parts = new Map<
+    string,
+    { group: Group | null; order: number; shapes: LeaferShape[]; source: readonly CanvasPrimitive[] }
+  >();
+  private readonly textParts = new Map<string, Set<string>>();
+  private readonly mountedPartOrders: number[] = [];
+  private pendingPaths: Map<string, NodeDataPath> | null = null;
+  private pendingVersion: number | null = null;
+  private renderedEditing: TextEditingTarget | null = null;
+
+  /** 保留离屏和同帧多次提交的变化；整体替换或缺少路径提示时必须完整重建。 */
+  recordChanges(paths: NodeDataPaths, version: number): void {
+    // 版本来自全局时钟，其他实体变化也会使数值跳跃，不能用差值判断本节点是否漏帧。
+    if (paths === null || this.pendingVersion === null) this.pendingPaths = null;
+    if (this.pendingPaths && paths) for (const path of paths) this.pendingPaths.set(JSON.stringify(path), path);
+    this.pendingVersion = version;
+  }
 
   constructor(
     private readonly env: NodeViewEnvironment,
     node: Readonly<NodeEntity>
   ) {
     this.node = node;
+    this.nodeType = node.nodeType;
     const def = env.nodeTypes.get(node.nodeType);
+    this.definition = def;
     this.content = def?.clipContent
       ? new Box({
           width: node.width,
@@ -84,11 +115,6 @@ export class NodeView {
         })
       : new Group();
     this.group.add(this.content);
-  }
-
-  /** 当前视图对应的节点类型标识 */
-  get nodeType(): string {
-    return this.node.nodeType;
   }
 
   /**
@@ -131,6 +157,13 @@ export class NodeView {
     const sizeChanged = node.width !== this.contentWidth || node.height !== this.contentHeight;
     const target = context.textEditing;
     const editing = target?.kind === 'node' && target.id === node.id ? target : null;
+    const fullComposition =
+      this.dataVersion < 0 ||
+      sizeChanged ||
+      context.theme !== this.theme ||
+      this.detail !== 'full' ||
+      (versions.dataVersion !== this.dataVersion &&
+        (this.pendingPaths === null || this.pendingVersion !== versions.dataVersion));
     if (
       versions.dataVersion === this.dataVersion &&
       !sizeChanged &&
@@ -149,12 +182,16 @@ export class NodeView {
     this.contentWidth = node.width;
     this.contentHeight = node.height;
     this.theme = context.theme;
-    this.renderContent(context, detail);
+    this.renderContent(context, detail, fullComposition);
+    this.pendingPaths = new Map();
+    this.pendingVersion = versions.dataVersion;
   }
 
   /** 资产元数据或节点类型注册表变化不改节点版本，显式使内容缓存失效。 */
   invalidateContent(): void {
     this.dataVersion = -1;
+    this.pendingPaths = null;
+    this.pendingVersion = null;
     if (this.detail === 'broken') this.detail = null;
   }
 
@@ -166,12 +203,16 @@ export class NodeView {
       const children = new Set(container.children as Group[]);
       withDetachedBranches([container], () => container.removeAll(), new Map([[container, { removed: children }]]));
     }
-    if (this.detail === 'full') this.env.renderers.get(this.node.nodeType)?.destroy?.(this.shapes, this.node);
+    this.releaseNative();
     this.group.destroy();
+    this.parts.clear();
+    this.mountedPartOrders.length = 0;
+    this.textParts.clear();
+    this.pendingPaths = null;
   }
 
   /** 内容来源：占位块 / 原生渲染器 / 声明式 compose()；异常局部捕获并降级为占位框 */
-  private renderContent(context: LeaferRenderContext, detail: NodeRenderDetail): void {
+  private renderContent(context: LeaferRenderContext, detail: NodeRenderDetail, fullComposition: boolean): void {
     const { node } = this;
     const { theme } = context;
     try {
@@ -189,11 +230,14 @@ export class NodeView {
       const nativeRenderer = this.env.renderers.get(node.nodeType);
       if (nativeRenderer) {
         // 从占位或崩溃态恢复时整体重建
-        if (this.detail === 'full' && this.shapes.length > 0) {
+        if (this.detail === 'full' && this.shapes.length > 0 && this.nativeRenderer === nativeRenderer) {
           nativeRenderer.update(this.shapes, node, context);
+          this.nativeNode = { ...node };
         } else {
           this.discardShapes();
           this.shapes = nativeRenderer.create(node, context);
+          this.nativeRenderer = nativeRenderer;
+          this.nativeNode = { ...node };
           for (const shape of this.shapes) this.content.add(shape);
         }
         this.detail = 'full';
@@ -202,6 +246,11 @@ export class NodeView {
 
       // 未注册类型兜底为按节点样式绘制的矩形
       const definition = this.env.nodeTypes.get(node.nodeType);
+      if (definition?.composeParts) {
+        this.renderParts(definition, context, fullComposition);
+        this.detail = 'full';
+        return;
+      }
       const { editing } = this;
       const primitives: CanvasPrimitive[] = definition?.compose
         ? applyThemeToPrimitives(
@@ -229,7 +278,7 @@ export class NodeView {
               radius: node.style?.radius
             }
           ];
-      if (this.detail !== 'full') this.discardShapes();
+      if (this.detail !== 'full' || this.parts.size || this.nativeRenderer) this.discardShapes();
       this.shapes = this.env.mapper.reconcile(this.content, this.shapes, primitives);
       this.detail = 'full';
     } catch (err) {
@@ -243,10 +292,83 @@ export class NodeView {
     }
   }
 
+  private indexPart(id: string, primitives: readonly CanvasPrimitive[], add: boolean): void {
+    for (const primitive of primitives) {
+      if (primitive.kind !== 'text' || !primitive.id) continue;
+      if (add) {
+        let ids = this.textParts.get(primitive.id);
+        if (!ids) this.textParts.set(primitive.id, (ids = new Set()));
+        ids.add(id);
+      } else {
+        const ids = this.textParts.get(primitive.id);
+        ids?.delete(id);
+        if (!ids?.size) this.textParts.delete(primitive.id);
+      }
+    }
+  }
+
+  private renderParts(definition: NodeTypeDefinition, context: LeaferRenderContext, full: boolean): void {
+    const paths = [...(this.pendingPaths?.values() ?? [])];
+    let updates: readonly NodeCompositionPart[] | null = null;
+    if (!full && this.parts.size)
+      updates = paths.length
+        ? (definition.composeChangedParts?.(this.node, { theme: context.theme }, paths) ?? null)
+        : [];
+    if (updates?.some((part) => !this.parts.has(part.id))) updates = null;
+    const dirty = new Set<string>();
+    if (updates === null) {
+      const all = definition.composeParts!(this.node, { theme: context.theme });
+      this.discardShapes();
+      for (const [order, part] of all.entries()) {
+        if (this.parts.has(part.id)) throw new Error(`重复渲染分片: ${part.id}`);
+        this.parts.set(part.id, { group: null, order, shapes: [], source: part.primitives });
+        this.indexPart(part.id, part.primitives, true);
+        dirty.add(part.id);
+      }
+    } else {
+      for (const part of updates) {
+        const view = this.parts.get(part.id)!;
+        this.indexPart(part.id, view.source, false);
+        view.source = part.primitives;
+        this.indexPart(part.id, view.source, true);
+        dirty.add(part.id);
+      }
+      for (const editing of [this.renderedEditing, this.editing]) {
+        if (editing) for (const id of this.textParts.get(editing.blockId) ?? []) dirty.add(id);
+      }
+    }
+    for (const id of dirty) {
+      const view = this.parts.get(id)!;
+      if (!view.source.length && !view.group) continue;
+      if (!view.group) {
+        let start = 0;
+        let end = this.mountedPartOrders.length;
+        while (start < end) {
+          const middle = (start + end) >> 1;
+          if (this.mountedPartOrders[middle] < view.order) start = middle + 1;
+          else end = middle;
+        }
+        view.group = new Group();
+        this.content.addAt(view.group, start);
+        this.mountedPartOrders.splice(start, 0, view.order);
+      }
+      const primitives = applyThemeToPrimitives(
+        view.source.map((primitive) =>
+          this.editing && primitive.kind === 'text' && primitive.id === this.editing.blockId
+            ? editingTextPrimitive(primitive, this.editing)
+            : primitive
+        ),
+        context.theme
+      );
+      view.shapes = this.env.mapper.reconcile(view.group, view.shapes, primitives);
+    }
+    this.renderedEditing = this.editing;
+  }
+
   /** 纯色占位块：跳过文本排版与 compose，只按节点填充色 (未设置时取主题占位色) 绘制一个矩形 */
   private renderPlaceholder(theme: CanvasTheme): void {
     const { node } = this;
-    if (this.detail === 'full') this.discardShapes();
+    if (this.detail === 'full' || this.parts.size || this.nativeRenderer) this.discardShapes();
     this.shapes = this.env.mapper.reconcile(this.content, this.shapes, [
       {
         kind: 'rect',
@@ -262,8 +384,41 @@ export class NodeView {
 
   /** 切换内容来源前释放现有图元，原生渲染器的资源成对 destroy */
   private discardShapes(): void {
-    if (this.detail === 'full') this.env.renderers.get(this.node.nodeType)?.destroy?.(this.shapes, this.node);
+    this.releaseNative();
     for (const shape of this.shapes) shape.remove();
     this.shapes = [];
+    for (const part of this.parts.values()) part.group?.destroy();
+    this.parts.clear();
+    this.mountedPartOrders.length = 0;
+    this.textParts.clear();
+    this.renderedEditing = null;
+  }
+
+  /** 插件清理失败不能阻断整帧；先清除旧来源引用，再释放框架持有的原生图元。 */
+  private releaseNative(): void {
+    const renderer = this.nativeRenderer;
+    const node = this.nativeNode;
+    this.nativeRenderer = null;
+    this.nativeNode = null;
+    if (!renderer || !node) return;
+    const shapes = this.shapes;
+    const owned = shapes.slice();
+    this.shapes = [];
+    try {
+      renderer.destroy?.(shapes, node);
+    } catch (error) {
+      console.error(`[LeaferRenderer] 节点 ${node.id} (${node.nodeType}) 原生资源释放失败，继续清理图元:`, error);
+    } finally {
+      for (const shape of owned) {
+        if (shape.destroyed) continue;
+        try {
+          // 先从场景摘除，子类释放失败也不让外层销毁再次进入同一图元。
+          shape.remove();
+          shape.destroy();
+        } catch (error) {
+          console.error(`[LeaferRenderer] 节点 ${node.id} (${node.nodeType}) 原生图元释放失败:`, error);
+        }
+      }
+    }
   }
 }

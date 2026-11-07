@@ -136,6 +136,7 @@ export class LeaferRenderer implements CanvasRenderer {
       engine.attachHost(this.bridge),
       // 文档增量变更：登记待销毁实体与层级脏标记，合并到下一帧
       engine.documentStore.subscribe((_view, _record, changes) => {
+        this.nodeLayer.recordChanges(changes);
         if (changes.contentReplaced) this.nodeLayer.destroyAll();
         else {
           this.images.reconcile(changes.nodes.removed);

@@ -5,7 +5,7 @@
 
 import type { Group } from 'leafer-ui';
 import { isNodeHiddenByOpacity, type SkyNoteEngine } from '@skynote/core';
-import type { RuntimeNodeView } from '@skynote/core';
+import type { DocumentChangeSet, RuntimeNodeView } from '@skynote/core';
 import type { LayerSyncResult, LeaferRenderContext } from '../types';
 import type { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import type { PrimitiveMapper } from '../primitives/primitive-mapper';
@@ -34,6 +34,16 @@ export class NodeLayer {
   private readonly views = new Map<string, NodeView>();
   private readonly assetNodes = new Map<string, Set<string>>();
   private readonly nodeAssets = new Map<string, { version: number; ids: readonly string[] }>();
+
+  recordChanges(changes: DocumentChangeSet): void {
+    for (const id of changes.nodes.data)
+      this.views
+        .get(id)
+        ?.recordChanges(
+          changes.nodes.dataPaths?.get(id) ?? null,
+          this.options.engine.entityStore.getNode(id)?.runtime.dataVersion ?? -1
+        );
+  }
 
   invalidateAssets(assetIds: ReadonlySet<string>): void {
     for (const assetId of assetIds)
@@ -134,8 +144,9 @@ export class NodeLayer {
   destroy(nodeId: string): void {
     this.releaseAssetIndex(nodeId);
     this.visibility.forget(nodeId);
-    this.views.get(nodeId)?.destroy();
+    const view = this.views.get(nodeId);
     this.views.delete(nodeId);
+    view?.destroy();
   }
 
   destroyAll(): void {
@@ -190,6 +201,11 @@ export class NodeLayer {
   private mount(runtimeNode: RuntimeNodeView, parentView: NodeView | undefined, frame: NodeFrame): NodeView {
     const node = runtimeNode.entity;
     const nodeId = node.id;
+    let view = this.views.get(nodeId);
+    if (view && (view.nodeType !== node.nodeType || view.definition !== this.env.nodeTypes.get(node.nodeType))) {
+      this.destroy(nodeId);
+      view = undefined;
+    }
     if (this.nodeAssets.get(nodeId)?.version !== runtimeNode.runtime.dataVersion) {
       this.releaseAssetIndex(nodeId);
       let ids: readonly string[] = [];
@@ -212,7 +228,6 @@ export class NodeLayer {
     const entering = !this.visibility.shownIds.has(nodeId);
     const start = entering ? performance.now() : 0;
 
-    let view = this.views.get(nodeId);
     const created = !view;
     if (!view) {
       view = new NodeView(this.env, node);
