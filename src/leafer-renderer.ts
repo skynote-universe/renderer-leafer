@@ -155,6 +155,8 @@ export class LeaferRenderer implements CanvasRenderer {
         this.nodeLayer.invalidateNodeType(type);
         this.requestRender();
       }),
+      // 布局能力晚注册/卸载可能只改变折叠可见性，并不产生几何补丁。
+      engine.layouts.onChange(() => this.requestRender()),
       // 视口变换立即生效 (平移缩放零延迟跟手)，视锥、选中态与主题重绘合并到下一帧；进入维护冻结时清除瞬态预览
       session.subscribe((change) => {
         if (change.viewportChanged) this.applyViewportTransform();

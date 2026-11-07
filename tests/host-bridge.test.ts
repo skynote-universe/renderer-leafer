@@ -256,7 +256,14 @@ describe('DOMHostBridge 按帧合并输入', () => {
     expect(svgOf()).toContain('rotate(35 16 16)');
 
     bridge.setCursor('pointer');
-    expect(container.style.cursor).toBe('pointer');
+    expect(container.style.cursor).toContain('data:image/svg+xml');
+    expect(container.style.cursor).toContain('14 5, pointer');
+    expect(svgOf()).toContain('paint-order="stroke"');
+    engine.cursors.setStyle({ ink: 'navy' });
+    expect(svgOf()).toContain('fill="navy"');
+
+    bridge.setCursor('wait');
+    expect(container.style.cursor).toBe('wait');
 
     // 统一配色与覆盖：注册表变化后当前光标立即刷新；恢复后回到内置
     bridge.setCursor('move');
