@@ -39,8 +39,12 @@
     "bench": "vitest run --dir bench"
   },
   "dependencies": {
-    "@skynote/core": "workspace:*",
     "@leafer-in/color": "2.1.4",
+    "@leafer-in/interface": "2.1.4",
+    "@leafer-ui/draw": "2.1.4",
+    "@leafer-ui/interface": "2.1.4",
+    "@leafer/interface": "2.1.4",
+    "@skynote/core": "workspace:*",
     "leafer-ui": "2.1.4"
   },
   "devDependencies": {
