@@ -116,3 +116,78 @@ describe('Renderer Schedulers', () => {
     expect(large.evaluate({ ...busy, now: 480 }).level).toBe('minimal');
   });
 });
+describe('宿主 LOD 配置', () => {
+  const steady = {
+    now: 0,
+    zoom: 1,
+    documentNodes: 100_000,
+    documentConnectors: 0,
+    visibleNodes: 200,
+    visibleConnectors: 0,
+    nodeObjects: 200,
+    connectorObjects: 0,
+    isInteracting: false
+  };
+
+  it('省略配置沿用全局交互阈值，视口和文档规则可分别控制', () => {
+    expect(new AdaptiveLodController().evaluate(steady).level).toBe('full');
+    expect(new AdaptiveLodController().evaluate({ ...steady, isInteracting: true }).reasons).toEqual([
+      'active-interaction'
+    ]);
+
+    const controller = new AdaptiveLodController(
+      { rules: { document: false, viewport: { nodes: { reduced: 500, minimal: 1_000 } } } },
+      { hardwareConcurrency: 4 }
+    );
+    expect(controller.evaluate({ ...steady, isInteracting: true, visibleNodes: 499 }).level).toBe('full');
+    expect(controller.evaluate({ ...steady, visibleNodes: 500 }).level).toBe('reduced');
+    expect(controller.evaluate({ ...steady, visibleNodes: 1_000 }).level).toBe('minimal');
+
+    const global = new AdaptiveLodController({
+      rules: { document: { when: 'always', nodes: { reduced: 100_000, minimal: 200_000 }, connectors: false } }
+    });
+    expect(global.evaluate(steady).reasons).toEqual(['document-pressure']);
+    expect(global.evaluate({ ...steady, documentNodes: 200_000 }).level).toBe('minimal');
+  });
+
+  it('允许独立配置和关闭缩放、缓存及计时规则', () => {
+    const configured = new AdaptiveLodController({
+      rules: {
+        zoom: { reduced: 0.5, minimal: false, largeDocument: false },
+        cache: { nodes: { reduced: 300, minimal: 600 } },
+        timing: { reduced: 10, minimal: 20, minSamples: 2, minVisibleEntities: 50, interactionMinimal: false }
+      }
+    });
+    expect(configured.evaluate({ ...steady, zoom: 0.49 }).reasons).toEqual(['low-zoom']);
+    expect(configured.evaluate({ ...steady, nodeObjects: 600 }).level).toBe('minimal');
+    configured.recordFrame(21, 0);
+    configured.recordFrame(21, 1);
+    expect(configured.evaluate({ ...steady, now: 1 }).reasons).toEqual(['render-time-pressure']);
+
+    const disabled = new AdaptiveLodController({ rules: { zoom: false, cache: false, timing: false } });
+    disabled.recordFrame(100, 0);
+    expect(disabled.evaluate({ ...steady, zoom: 0.01, nodeObjects: 50_000 }).level).toBe('full');
+    expect(() => new AdaptiveLodController({ rules: { viewport: { nodes: { reduced: 500, minimal: 400 } } } })).toThrow(
+      RangeError
+    );
+  });
+
+  it('自定义策略可覆盖或回退，回升仍按宿主延迟', () => {
+    const controller = new AdaptiveLodController({
+      recoveryDelayMs: 120,
+      decide: ({ visibleNodes, isInteracting }, suggestedLevel) => {
+        if (visibleNodes === 1) throw new Error('policy failed');
+        if (visibleNodes === 2) return 'invalid' as never;
+        if (isInteracting && suggestedLevel === 'reduced') return 'full';
+        return undefined;
+      }
+    });
+    expect(controller.evaluate({ ...steady, isInteracting: true }).level).toBe('full');
+    expect(controller.evaluate({ ...steady, visibleNodes: 1, zoom: 0.2 }).level).toBe('reduced');
+    expect(controller.evaluate({ ...steady, visibleNodes: 2, zoom: 0.05 }).level).toBe('minimal');
+    expect(controller.evaluate({ ...steady, now: 119 }).level).toBe('minimal');
+    expect(controller.recoveryAt).toBe(120);
+    expect(controller.evaluate({ ...steady, now: 120 }).level).toBe('full');
+    expect(controller.recoveryAt).toBeUndefined();
+  });
+});

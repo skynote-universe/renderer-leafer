@@ -1,10 +1,11 @@
 import './setup';
 import { describe, it, expect, vi } from 'vitest';
 import { Rect } from 'leafer-ui';
-import { SkyNoteEngine } from '@skynote/core';
+import { createEmptyCanvasDocument, SkyNoteEngine } from '@skynote/core';
 import type { NodeEntity, ConnectorEntity } from '@skynote/core';
 import type { FrameCommitScheduler } from '../src/scheduler/frame-commit-scheduler';
 import { LeaferRenderer } from '../src/leafer-renderer';
+import { LeaferAdapter } from '../src/adapter/leafer-adapter';
 
 function makeNode(id: string, x: number, nodeType = 'rect'): NodeEntity {
   return { id, type: 'node', nodeType, x, y: 0, width: 50, height: 50, rotation: 0, zIndex: 'a1', locked: false };
@@ -139,6 +140,84 @@ describe('LeaferRenderer 会话状态、选中态重绘与 LOD', () => {
     renderer.destroy();
   });
 
+  it('LeaferAdapter 传入宿主阈值与恢复延迟，也可关闭 LOD', async () => {
+    const engine = new SkyNoteEngine();
+    engine.documentStore.addNode(makeNode('a', 0));
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 1000 });
+    Object.defineProperty(container, 'clientHeight', { value: 800 });
+    const adapter = new LeaferAdapter({ lod: { recoveryDelayMs: 30, rules: { zoom: { reduced: 0.6 } } } });
+    const renderer = adapter.mount(engine, container) as LeaferRenderer;
+    try {
+      engine.session.setViewport({ zoom: 0.5 });
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('reduced');
+      engine.session.setViewport({ zoom: 1 });
+      renderer.renderFrame();
+      await vi.waitFor(() => expect(renderer.lodLevel).toBe('full'), { timeout: 500, interval: 10 });
+    } finally {
+      renderer.destroy();
+    }
+
+    const full = new LeaferAdapter({ lod: false }).mount(engine, container) as LeaferRenderer;
+    try {
+      engine.session.setViewport({ zoom: 0.05 });
+      full.renderFrame();
+      expect(full.lodLevel).toBe('full');
+    } finally {
+      full.destroy();
+      engine.destroy();
+    }
+  });
+  it('交互降级严格按实际视口超出 5000 节点判定，排除边缘缓冲', () => {
+    const doc = createEmptyCanvasDocument();
+    for (let i = 0; i < 5_000; i++) {
+      const node = { ...makeNode(`n${i}`, (i % 100) * 8 + 110), y: Math.floor(i / 100) * 12 };
+      doc.content.nodes[node.id] = node;
+    }
+    doc.content.nodes.edge = makeNode('edge', 1_050);
+    const engine = new SkyNoteEngine({ initialDoc: doc });
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 1000 });
+    Object.defineProperty(container, 'clientHeight', { value: 800 });
+    const renderer = new LeaferRenderer(engine, container, {
+      lod: {
+        viewportNodesAbove: 5_000,
+        rules: {
+          document: false,
+          viewport: { nodes: false, interactionNodesAbove: 5_000 },
+          timing: false
+        }
+      }
+    });
+
+    try {
+      const interaction = renderer as unknown as { isInteracting: boolean };
+      interaction.isInteracting = true;
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('full');
+
+      engine.session.setViewport({ x: -100 });
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('reduced');
+
+      // 回到 5000 个节点时，即使仍处在低缩放及恢复迟滞期间，也必须立即恢复。
+      engine.session.setViewport({ x: 700, zoom: 0.3 });
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('full');
+
+      interaction.isInteracting = false;
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('full');
+
+      engine.session.setViewport({ x: 670 });
+      renderer.renderFrame();
+      expect(renderer.lodLevel).toBe('reduced');
+    } finally {
+      renderer.destroy();
+      engine.destroy();
+    }
+  });
   it('单个节点渲染抛错时局部降级为占位框，不影响其他节点，也不会每帧重复抛错', () => {
     const engine = new SkyNoteEngine();
     engine.documentStore.addNode(makeNode('bad', 0, 'broken'));

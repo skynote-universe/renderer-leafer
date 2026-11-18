@@ -46,10 +46,32 @@ editor.mount(document.getElementById('canvas')!);
 | --- | --- | --- |
 | `pixelRatio` | `window.devicePixelRatio` | 设备像素比 |
 | `enableFrameScheduler` | `true` | 分帧调度 |
+| `lod` | 内置规则 | 自适应细节规则和恢复延迟 |
 | `offscreenCacheLimit` | `2000` | 离屏图元缓存上限 (节点与连线各自计数) |
 
 需要换用其他渲染技术时，实现内核的 `RenderAdapter` 接口即可，节点与交互代码无需改动。
 
+### 自定义渲染降级
+
+`lod` 由宿主在初始化适配器时传入。以下配置在候选节点达到 1,500 和 5,000 时分别降到 `reduced` 和 `minimal`，并关闭仅因文档总量触发的交互降级。
+
+```ts
+const renderer = new LeaferAdapter({
+  lod: {
+    recoveryDelayMs: 300,
+    rules: {
+      viewport: { nodes: { reduced: 1_500, minimal: 5_000 } },
+      document: false,
+    },
+  },
+})
+```
+
+- `viewport` 按含视口缓冲的候选节点和连线计数，`document` 按文档总量计数，`cache` 按缓存图元计数。三组均可分别配置节点和连线。文档规则默认在指针交互期间检查，可用 `when: 'always'` 持续检查。`viewport.interactionNodesAbove` 则按实际视口内的节点计数，严格超过该值且有指针交互才触发 `reduced`。
+- `lod.viewportNodesAbove` 为所有降级规则和自定义策略设置实际视口节点数门槛。节点数低于或等于门槛时立即恢复完整细节，超过门槛后按配置评估档位。
+- `zoom` 可指定低于哪个缩放比例时降级，`timing` 可指定渲染耗时 P95 和样本门槛。计数与耗时达到阈值时触发，缩放低于阈值时触发。多条内置规则同时命中时取最强降级。
+- 省略的规则和字段继承默认值。用 `false` 关闭对应规则组、实体类型或档位，用 `lod: false` 关闭自适应 LOD。直接指定的节点或连线阈值按实际数量比较。分帧调度通过独立的 `enableFrameScheduler` 配置。
+- 复杂策略可传入 `decide(metrics, suggestedLevel)`。只读指标来自当帧已有的候选量、文档总量、缓存、缩放、交互状态和计时样本。策略应保持同步、无副作用。返回 `undefined`、非法值或抛出异常时使用内置建议。控制器统一处理恢复延迟。
 ## 相关包
 
 | 包 | 说明 |

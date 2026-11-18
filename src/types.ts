@@ -4,6 +4,7 @@
  */
 
 import type { CanvasTheme, NodeEntity, TextEditingTarget, ViewportState } from '@skynote/core';
+import type { LeaferLodOptions } from './scheduler/adaptive-lod';
 import type { Group, Rect, Ellipse, Polygon, Path, Line, Text, Box, Image } from 'leafer-ui';
 
 /** 渲染器使用的 Leafer 图元 */
@@ -47,6 +48,8 @@ export interface ImageFailureAppearance {
 }
 
 export interface LeaferRendererOptions {
+  /** 自适应细节规则，false 关闭 LOD。 */
+  lod?: LeaferLodOptions | false;
   /** 宿主提供的失败展示资源；不登记为文档资产，失败时退回内置文字。 */
   imageFailure?: ImageFailureAppearance;
   /** 固定的设备像素比；缺省时跟随 window.devicePixelRatio 及其变化 (浏览器缩放、换屏) */

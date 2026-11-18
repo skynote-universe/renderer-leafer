@@ -47,6 +47,8 @@ export interface AdaptiveLodInput {
   nodeObjects: number;
   connectorObjects: number;
   isInteracting: boolean;
+  viewportInteractionPressure?: boolean;
+  viewportGatePassed?: boolean;
 }
 
 export interface SkyNoteAdaptiveLodState {
@@ -77,6 +79,76 @@ export const DEFAULT_ADAPTIVE_LOD_OPTIONS: Readonly<AdaptiveLodOptions> = Object
   minimalConnectorObjects: 12_000
 });
 
+/** 数量或耗时达到阈值时触发，false 关闭对应档位。 */
+export interface LodThresholds {
+  reduced?: number | false;
+  minimal?: number | false;
+}
+
+export interface LodEntityThresholds {
+  nodes?: LodThresholds | false;
+  connectors?: LodThresholds | false;
+}
+
+export interface LeaferLodRules {
+  /** 使用含视口边缘缓冲的渲染候选数。 */
+  viewport?:
+    | (LodEntityThresholds & {
+        /** 仅交互期间，实际视口内节点数严格超过该值时至少降到 reduced。 */
+        interactionNodesAbove?: number;
+      })
+    | false;
+  document?: (LodEntityThresholds & { when?: 'interacting' | 'always' }) | false;
+  cache?: LodEntityThresholds | false;
+  /** 缩放比例低于阈值时触发。 */
+  zoom?:
+    | (LodThresholds & {
+        largeDocument?: { nodes?: number; below?: number } | false;
+      })
+    | false;
+  timing?:
+    | (LodThresholds & {
+        minSamples?: number;
+        minVisibleEntities?: number;
+        interactionMinimal?: number | false;
+      })
+    | false;
+}
+
+export interface LeaferLodMetrics extends Readonly<AdaptiveLodInput> {
+  readonly renderP95Ms: number;
+  readonly sampleCount: number;
+  readonly deviceTier: SkyNoteDeviceTier;
+}
+
+export interface LeaferLodOptions {
+  /** 抗抖恢复延迟，单位毫秒。0 表示立即恢复。 */
+  recoveryDelayMs?: number;
+  /** 仅当实际视口内节点数严格超过该值时允许 LOD，低于或等于门槛立即恢复。 */
+  viewportNodesAbove?: number;
+  /** 省略规则使用默认值。显式数量阈值按实际数量比较。 */
+  rules?: LeaferLodRules;
+  /** 同步纯函数。返回 undefined 使用内置规则建议，异常或无效结果同样回退。 */
+  decide?: (metrics: LeaferLodMetrics, suggestedLevel: SkyNoteLodLevel) => SkyNoteLodLevel | undefined;
+}
+
+interface ThresholdPair {
+  reduced: number;
+  minimal: number;
+}
+
+interface ResolvedEntityThresholds {
+  nodes: ThresholdPair;
+  connectors: ThresholdPair;
+}
+
+interface ResolvedRules {
+  viewport: ResolvedEntityThresholds & { interactionNodesAbove?: number };
+  cache: ResolvedEntityThresholds;
+  document?: ResolvedEntityThresholds & { when: 'interacting' | 'always' };
+  zoom?: ThresholdPair & { largeDocument?: { nodes: number; below: number } };
+  timing?: ThresholdPair & { minSamples: number; minVisibleEntities: number; interactionMinimal: number };
+}
 interface FrameSample {
   at: number;
   duration: number;
@@ -90,17 +162,27 @@ const LEVEL_VALUE: Readonly<Record<SkyNoteLodLevel, number>> = {
 
 export class AdaptiveLodController {
   private readonly options: AdaptiveLodOptions;
+  readonly viewportNodesAbove: number | undefined;
   private readonly deviceTier: SkyNoteDeviceTier;
-  private readonly capacityScale: number;
+  private readonly rules: ResolvedRules;
+  private readonly decide: LeaferLodOptions['decide'];
   private readonly samples: FrameSample[] = [];
   private level: SkyNoteLodLevel = 'full';
   private lastPressureAt = Number.NEGATIVE_INFINITY;
   private state: SkyNoteAdaptiveLodState;
 
-  constructor(options: Partial<AdaptiveLodOptions> = {}, deviceProfile: AdaptiveLodDeviceProfile = {}) {
+  constructor(
+    options: Partial<AdaptiveLodOptions> & LeaferLodOptions = {},
+    deviceProfile: AdaptiveLodDeviceProfile = {}
+  ) {
     this.options = normalizeOptions(options);
+    this.viewportNodesAbove =
+      options.viewportNodesAbove === undefined
+        ? undefined
+        : validateRuleValue(options.viewportNodesAbove, options.viewportNodesAbove, 'viewportNodesAbove');
     this.deviceTier = resolveDeviceTier(deviceProfile);
-    this.capacityScale = this.deviceTier === 'low' ? 0.7 : this.deviceTier === 'high' ? 1.2 : 1;
+    this.rules = resolveRules(this.options, options.rules, this.deviceTier);
+    this.decide = options.decide;
     this.state = {
       level: 'full',
       desiredLevel: 'full',
@@ -110,6 +192,16 @@ export class AdaptiveLodController {
       isInteracting: false,
       reasons: []
     };
+  }
+
+  get viewportInteractionNodesAbove(): number | undefined {
+    return this.rules.viewport.interactionNodesAbove;
+  }
+
+  /** 下次允许回升的绝对时刻，按 evaluate 使用的时钟表示。 */
+  get recoveryAt(): number | undefined {
+    if (this.level === this.state.desiredLevel) return undefined;
+    return this.lastPressureAt + this.options.recoveryDelayMs;
   }
 
   recordFrame(duration: number, now: number): void {
@@ -122,9 +214,26 @@ export class AdaptiveLodController {
   evaluate(input: AdaptiveLodInput): SkyNoteAdaptiveLodState {
     this.pruneSamples(input.now);
     const renderP95Ms = percentile95(this.samples.map((sample) => sample.duration));
-    const decision = this.resolveDesiredLevel(input, renderP95Ms);
+    const viewportBlocked = this.viewportNodesAbove !== undefined && !input.viewportGatePassed;
+    const decision: { level: SkyNoteLodLevel; reasons: string[] } = viewportBlocked
+      ? { level: 'full', reasons: ['viewport-node-gate'] }
+      : this.resolveDesiredLevel(input, renderP95Ms);
+    if (!viewportBlocked && this.decide) {
+      try {
+        const custom = this.decide(
+          { ...input, renderP95Ms, sampleCount: this.samples.length, deviceTier: this.deviceTier },
+          decision.level
+        );
+        if (custom === 'full' || custom === 'reduced' || custom === 'minimal') {
+          decision.level = custom;
+          decision.reasons.push('custom-policy');
+        }
+      } catch {
+        // 宿主策略错误时继续使用内置规则，避免中断绘制。
+      }
+    }
 
-    if (LEVEL_VALUE[decision.level] >= LEVEL_VALUE[this.level]) {
+    if (viewportBlocked || LEVEL_VALUE[decision.level] >= LEVEL_VALUE[this.level]) {
       if (decision.level !== 'full') {
         this.lastPressureAt = input.now;
       }
@@ -168,58 +277,51 @@ export class AdaptiveLodController {
       }
       reasons.push(reason);
     };
-    const scaled = (value: number) => Math.max(1, Math.floor(value * (this.options.enabled ? this.capacityScale : 1)));
-
-    if (input.zoom < 0.12) promote('minimal', 'very-low-zoom');
-    // 06 号设计文档约定：缩放低于 30% 时卡片内容已不可读，停止排版改绘占位块
-    else if (input.zoom < 0.3) promote('reduced', 'low-zoom');
-    else if (input.documentNodes >= 5_000 && input.zoom < 0.55) {
-      promote('reduced', 'low-zoom-large-document');
-    }
-
-    if (input.visibleNodes >= scaled(this.options.minimalVisibleNodes)) {
-      promote('minimal', 'visible-node-pressure');
-    } else if (input.visibleNodes >= scaled(this.options.reducedVisibleNodes)) {
-      promote('reduced', 'visible-node-pressure');
-    }
-    if (input.visibleConnectors >= scaled(this.options.minimalVisibleConnectors)) {
-      promote('minimal', 'visible-connector-pressure');
-    } else if (input.visibleConnectors >= scaled(this.options.reducedVisibleConnectors)) {
-      promote('reduced', 'visible-connector-pressure');
-    }
-    if (input.nodeObjects >= scaled(this.options.minimalNodeObjects)) {
-      promote('minimal', 'node-object-pressure');
-    } else if (input.nodeObjects >= scaled(this.options.reducedNodeObjects)) {
-      promote('reduced', 'node-object-pressure');
-    }
-    if (input.connectorObjects >= scaled(this.options.minimalConnectorObjects)) {
-      promote('minimal', 'connector-object-pressure');
-    } else if (input.connectorObjects >= scaled(this.options.reducedConnectorObjects)) {
-      promote('reduced', 'connector-object-pressure');
-    }
-
-    const timingReliable =
-      this.samples.length >= this.options.timingMinSamples &&
-      input.visibleNodes + input.visibleConnectors >= this.options.timingMinVisibleEntities;
-    if (this.options.enabled && timingReliable) {
-      if (renderP95Ms >= this.options.minimalRenderP95Ms) {
-        promote('minimal', 'render-time-pressure');
-      } else if (renderP95Ms >= this.options.reducedRenderP95Ms) {
-        promote('reduced', 'render-time-pressure');
+    const applyThreshold = (pair: ThresholdPair, value: number, reason: string): void => {
+      if (value >= pair.minimal) promote('minimal', reason);
+      else if (value >= pair.reduced) promote('reduced', reason);
+    };
+    const { zoom, viewport, cache, timing, document } = this.rules;
+    if (zoom) {
+      if (input.zoom < zoom.minimal) promote('minimal', 'very-low-zoom');
+      else if (input.zoom < zoom.reduced) promote('reduced', 'low-zoom');
+      else if (
+        zoom.largeDocument &&
+        input.documentNodes >= zoom.largeDocument.nodes &&
+        input.zoom < zoom.largeDocument.below
+      ) {
+        promote('reduced', 'low-zoom-large-document');
       }
-      if (input.isInteracting && renderP95Ms >= 20) {
+    }
+
+    applyThreshold(viewport.nodes, input.visibleNodes, 'visible-node-pressure');
+    applyThreshold(viewport.connectors, input.visibleConnectors, 'visible-connector-pressure');
+    if (input.isInteracting && input.viewportInteractionPressure) promote('reduced', 'viewport-interaction');
+    applyThreshold(cache.nodes, input.nodeObjects, 'node-object-pressure');
+    applyThreshold(cache.connectors, input.connectorObjects, 'connector-object-pressure');
+
+    if (
+      timing &&
+      this.samples.length >= timing.minSamples &&
+      input.visibleNodes + input.visibleConnectors >= timing.minVisibleEntities
+    ) {
+      applyThreshold(timing, renderP95Ms, 'render-time-pressure');
+      if (input.isInteracting && renderP95Ms >= timing.interactionMinimal) {
         promote('minimal', 'interaction-frame-pressure');
       }
     }
 
-    if (
-      this.options.enabled &&
-      input.isInteracting &&
-      (input.documentNodes >= 5_000 || input.documentConnectors >= 3_000)
-    ) {
-      promote('reduced', 'active-interaction');
+    if (document && (document.when === 'always' || input.isInteracting)) {
+      const reason = document.when === 'always' ? 'document-pressure' : 'active-interaction';
+      if (input.documentNodes >= document.nodes.minimal || input.documentConnectors >= document.connectors.minimal) {
+        promote('minimal', reason);
+      } else if (
+        input.documentNodes >= document.nodes.reduced ||
+        input.documentConnectors >= document.connectors.reduced
+      ) {
+        promote('reduced', reason);
+      }
     }
-
     return { level, reasons };
   }
 
@@ -231,12 +333,127 @@ export class AdaptiveLodController {
   }
 }
 
+function resolveRules(options: AdaptiveLodOptions, rules: LeaferLodRules = {}, tier: SkyNoteDeviceTier): ResolvedRules {
+  const scale = options.enabled ? (tier === 'low' ? 0.7 : tier === 'high' ? 1.2 : 1) : 1;
+  const scaled = (value: number): number => Math.max(1, Math.floor(value * scale));
+  const settings = {
+    viewport: resolveEntityThresholds(
+      rules.viewport,
+      { reduced: scaled(options.reducedVisibleNodes), minimal: scaled(options.minimalVisibleNodes) },
+      { reduced: scaled(options.reducedVisibleConnectors), minimal: scaled(options.minimalVisibleConnectors) },
+      'viewport'
+    ),
+    cache: resolveEntityThresholds(
+      rules.cache,
+      { reduced: scaled(options.reducedNodeObjects), minimal: scaled(options.minimalNodeObjects) },
+      { reduced: scaled(options.reducedConnectorObjects), minimal: scaled(options.minimalConnectorObjects) },
+      'cache'
+    )
+  };
+  const result: ResolvedRules = settings;
+  const interactionNodesAbove = rules.viewport === false ? undefined : rules.viewport?.interactionNodesAbove;
+  if (interactionNodesAbove !== undefined) {
+    result.viewport.interactionNodesAbove = validateRuleValue(
+      interactionNodesAbove,
+      interactionNodesAbove,
+      'viewport.interactionNodesAbove'
+    );
+  }
+  if (rules.document !== false && (options.enabled || rules.document)) {
+    result.document = {
+      ...resolveEntityThresholds(
+        rules.document,
+        { reduced: 5_000, minimal: Infinity },
+        { reduced: 3_000, minimal: Infinity },
+        'document'
+      ),
+      when: rules.document?.when ?? 'interacting'
+    };
+  }
+  if (rules.zoom !== false) {
+    const large = rules.zoom?.largeDocument;
+    result.zoom = {
+      ...resolveThresholds(rules.zoom, { reduced: 0.3, minimal: 0.12 }, 'zoom', true),
+      largeDocument:
+        large === false
+          ? undefined
+          : {
+              nodes: validateRuleValue(large?.nodes, 5_000, 'zoom.largeDocument.nodes'),
+              below: validateRuleValue(large?.below, 0.55, 'zoom.largeDocument.below')
+            }
+    };
+  }
+  if (rules.timing !== false && (options.enabled || rules.timing)) {
+    result.timing = {
+      ...resolveThresholds(
+        rules.timing,
+        { reduced: options.reducedRenderP95Ms, minimal: options.minimalRenderP95Ms },
+        'timing'
+      ),
+      minSamples: validateRuleValue(rules.timing?.minSamples, options.timingMinSamples, 'timing.minSamples'),
+      minVisibleEntities: validateRuleValue(
+        rules.timing?.minVisibleEntities,
+        options.timingMinVisibleEntities,
+        'timing.minVisibleEntities'
+      ),
+      interactionMinimal:
+        rules.timing?.interactionMinimal === false
+          ? Infinity
+          : validateRuleValue(rules.timing?.interactionMinimal, 20, 'timing.interactionMinimal')
+    };
+  }
+  return result;
+}
+
+function resolveEntityThresholds(
+  configured: LodEntityThresholds | false | undefined,
+  nodes: ThresholdPair,
+  connectors: ThresholdPair,
+  name: string
+): ResolvedEntityThresholds {
+  return {
+    nodes: resolveThresholds(configured === false ? false : configured?.nodes, nodes, `${name}.nodes`),
+    connectors: resolveThresholds(
+      configured === false ? false : configured?.connectors,
+      connectors,
+      `${name}.connectors`
+    )
+  };
+}
+
+function resolveThresholds(
+  configured: LodThresholds | false | undefined,
+  defaults: ThresholdPair,
+  name: string,
+  below = false
+): ThresholdPair {
+  const disabled = below ? -Infinity : Infinity;
+  if (configured === false) return { reduced: disabled, minimal: disabled };
+  const reduced =
+    configured?.reduced === false
+      ? disabled
+      : validateRuleValue(configured?.reduced, defaults.reduced, `${name}.reduced`);
+  const minimal =
+    configured?.minimal === false
+      ? disabled
+      : validateRuleValue(configured?.minimal, defaults.minimal, `${name}.minimal`);
+  if (configured && reduced !== disabled && minimal !== disabled && (below ? minimal > reduced : minimal < reduced)) {
+    throw new RangeError(`LOD rule ${name}.minimal must be at least as strict as reduced`);
+  }
+  return { reduced, minimal };
+}
+
+function validateRuleValue(value: number | undefined, fallback: number, name: string): number {
+  if (value === undefined) return fallback;
+  if (!Number.isFinite(value) || value <= 0) throw new RangeError(`LOD rule ${name} must be a positive finite number`);
+  return value;
+}
 function normalizeOptions(options: Partial<AdaptiveLodOptions>): AdaptiveLodOptions {
   const merged = { ...DEFAULT_ADAPTIVE_LOD_OPTIONS, ...options };
   return {
     enabled: merged.enabled !== false,
     sampleWindowMs: positive(merged.sampleWindowMs, 2_000),
-    recoveryDelayMs: positive(merged.recoveryDelayMs, 800),
+    recoveryDelayMs: merged.recoveryDelayMs === 0 ? 0 : positive(merged.recoveryDelayMs, 800),
     timingMinSamples: positive(merged.timingMinSamples, 20),
     timingMinVisibleEntities: positive(merged.timingMinVisibleEntities, 300),
     reducedRenderP95Ms: positive(merged.reducedRenderP95Ms, 16),

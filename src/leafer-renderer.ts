@@ -12,8 +12,8 @@
  */
 
 import { Leafer, Group } from 'leafer-ui';
-import type { CanvasRenderer, SkyNoteEngine, CanvasExportRequest, CanvasExportResult } from '@skynote/core';
-import { computeViewportWorldBounds, expandBounds } from '@skynote/core';
+import type { CanvasRenderer, SkyNoteEngine, CanvasExportRequest, CanvasExportResult, RectBounds } from '@skynote/core';
+import { computeViewportWorldBounds, doBoundsIntersect, expandBounds } from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';
 import { LeaferOverlay } from './overlay/leafer-overlay';
 import { PrimitiveMapper } from './primitives/primitive-mapper';
@@ -21,12 +21,8 @@ import { LeaferFontMeasurer } from './text/leafer-font-measurer';
 import { DOMHostBridge } from './bridge/host-bridge';
 import { LeaferNodeRendererRegistry } from './registry/leafer-node-renderer-registry';
 import { FrameCommitScheduler } from './scheduler/frame-commit-scheduler';
-import {
-  AdaptiveLodController,
-  DEFAULT_ADAPTIVE_LOD_OPTIONS,
-  type SkyNoteAdaptiveLodState,
-  type SkyNoteLodLevel
-} from './scheduler/adaptive-lod';
+import { AdaptiveLodController } from './scheduler/adaptive-lod';
+import type { SkyNoteLodLevel } from './scheduler/adaptive-lod';
 import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
 import { ContentOrderSync } from './layers/content-order-sync';
@@ -56,7 +52,7 @@ export class LeaferRenderer implements CanvasRenderer {
   private readonly connectorLayer: ConnectorLayer;
   private readonly contentOrder: ContentOrderSync;
   private readonly frameScheduler: FrameCommitScheduler;
-  private readonly lodController = new AdaptiveLodController();
+  private readonly lodController: AdaptiveLodController | undefined;
   private readonly resizeObserver: ResizeObserver;
   /** 成对释放的订阅与监听 */
   private readonly disposers: Array<() => void> = [];
@@ -72,6 +68,7 @@ export class LeaferRenderer implements CanvasRenderer {
   private isFlushingInput = false;
   /** LOD 回升存在迟滞：等待期满后需主动补一帧，否则画面会停留在降级档位直到下一次交互 */
   private lodRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private lodRecoveryAt: number | undefined;
   private isDestroyed = false;
 
   constructor(
@@ -82,6 +79,7 @@ export class LeaferRenderer implements CanvasRenderer {
     const { session } = engine;
     const offscreenCacheLimit = Math.max(0, options?.offscreenCacheLimit ?? DEFAULT_OFFSCREEN_CACHE_LIMIT);
     this.frameScheduler = new FrameCommitScheduler({ enabled: options?.enableFrameScheduler !== false });
+    this.lodController = options?.lod === false ? undefined : new AdaptiveLodController(options?.lod);
 
     // 场景树分层：背景层 → 内容层 → 覆盖层
     this.leafer = new Leafer({
@@ -262,12 +260,17 @@ export class LeaferRenderer implements CanvasRenderer {
     if (this.pendingRemovedConnectorIds.size) connectorLayer.destroyMany(this.pendingRemovedConnectorIds);
     this.pendingRemovedConnectorIds.clear();
 
-    const frustum = expandBounds(computeViewportWorldBounds(session.viewport, session.viewportSize), FRUSTUM_PADDING);
+    const viewport = computeViewportWorldBounds(session.viewport, session.viewportSize);
+    const frustum = expandBounds(viewport, FRUSTUM_PADDING);
     const visibleNodeIds = engine.spatialIndex.search(frustum);
     const connectorCandidateIds = engine.connectorSpatialIndex.search(frustum);
 
     // 自适应 LOD：reduced 起节点降级为占位块，minimal 不再绘制连线
-    const lod = this.lodController.evaluate({
+    const gateLimit = this.lodController?.viewportNodesAbove;
+    const interactionLimit = this.lodController?.viewportInteractionNodesAbove;
+    const viewportGatePassed =
+      gateLimit === undefined || this.hasViewportNodesAbove(visibleNodeIds, viewport, gateLimit);
+    const lod = this.lodController?.evaluate({
       now: frameStart,
       zoom: session.viewport.zoom,
       documentNodes: entityStore.nodeCount,
@@ -276,11 +279,17 @@ export class LeaferRenderer implements CanvasRenderer {
       visibleConnectors: connectorCandidateIds.length,
       nodeObjects: nodeLayer.cacheCount,
       connectorObjects: connectorLayer.cacheCount,
-      isInteracting: this.isInteracting
+      isInteracting: this.isInteracting,
+      viewportGatePassed,
+      viewportInteractionPressure:
+        viewportGatePassed &&
+        this.isInteracting &&
+        interactionLimit !== undefined &&
+        (interactionLimit === gateLimit || this.hasViewportNodesAbove(visibleNodeIds, viewport, interactionLimit))
     });
-    this.currentLod = lod.level;
-    this.scheduleLodRecovery(lod);
-    const visibleConnectorIds = lod.level === 'minimal' ? [] : connectorCandidateIds;
+    this.currentLod = lod?.level ?? 'full';
+    this.scheduleLodRecovery(this.lodController?.recoveryAt);
+    const visibleConnectorIds = this.currentLod === 'minimal' ? [] : connectorCandidateIds;
 
     // 分帧提交：实体超载时分帧缓冲，选中实体优先
     const frame = this.frameScheduler.reconcileAndCommit({
@@ -308,7 +317,7 @@ export class LeaferRenderer implements CanvasRenderer {
       visibleNodeIds,
       (id) => frame.committedNodeIds.has(id),
       context,
-      lod.level === 'full' ? 'full' : 'placeholder',
+      this.currentLod === 'full' ? 'full' : 'placeholder',
       connectorContainerIds
     );
     const connectorSync = connectorLayer.sync(
@@ -329,7 +338,7 @@ export class LeaferRenderer implements CanvasRenderer {
       this.layerOrderInvalidated = false;
     }
 
-    this.lodController.recordFrame(performance.now() - frameStart, frameStart);
+    this.lodController?.recordFrame(performance.now() - frameStart, frameStart);
     // 分帧队列未清空时继续调度
     if (frame.state.active) this.requestRender();
   }
@@ -356,11 +365,30 @@ export class LeaferRenderer implements CanvasRenderer {
     this.scene.set({ x, y, scaleX: zoom, scaleY: zoom });
   }
 
-  private scheduleLodRecovery(lod: SkyNoteAdaptiveLodState): void {
-    if (lod.level === lod.desiredLevel || this.lodRecoveryTimer !== null) return;
-    this.lodRecoveryTimer = setTimeout(() => {
-      this.lodRecoveryTimer = null;
-      this.requestRender();
-    }, DEFAULT_ADAPTIVE_LOD_OPTIONS.recoveryDelayMs + 50);
+  private hasViewportNodesAbove(candidates: readonly string[], viewport: RectBounds, limit: number): boolean {
+    if (candidates.length <= limit) return false;
+    const spatialIndex = this.engine.spatialIndex;
+    let remaining = limit;
+    for (const id of candidates) {
+      const bounds = spatialIndex.getBounds(id);
+      if (bounds && doBoundsIntersect(bounds, viewport) && --remaining < 0) return true;
+    }
+    return false;
+  }
+  private scheduleLodRecovery(recoveryAt: number | undefined): void {
+    if (recoveryAt === this.lodRecoveryAt) return;
+    if (this.lodRecoveryTimer !== null) clearTimeout(this.lodRecoveryTimer);
+    this.lodRecoveryAt = recoveryAt;
+    this.lodRecoveryTimer =
+      recoveryAt === undefined
+        ? null
+        : setTimeout(
+            () => {
+              this.lodRecoveryTimer = null;
+              this.lodRecoveryAt = undefined;
+              this.requestRender();
+            },
+            Math.max(0, Math.ceil(recoveryAt - performance.now()))
+          );
   }
 }
