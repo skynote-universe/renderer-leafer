@@ -2,12 +2,29 @@ import { expandCornerRadius, resolveNodeStyle, type NodeEntity, type Point, type
 
 export const PREVIEW_TARGET_ATTRIBUTE = 'data-skynote-preview-target';
 export const PREVIEW_CONTENT_ATTRIBUTE = 'data-skynote-preview-content';
+const MIN_LOADING_DISPLAY_MS = 240;
+
+export interface PreviewStatusOptions {
+  readonly className: string;
+  readonly text: string;
+  readonly animate: boolean;
+  readonly signal: AbortSignal;
+}
+
+export interface PreviewStatusHandle {
+  readonly status: HTMLDivElement;
+  readonly spinner: HTMLSpanElement;
+  readonly message: HTMLSpanElement;
+  finish(onHidden?: () => void): void;
+  cancel(): void;
+}
 
 export class PreviewFrame {
   readonly element: HTMLDivElement;
   protected readonly surface: HTMLDivElement;
   protected readonly content: HTMLDivElement;
   protected readonly shield: HTMLDivElement;
+  private statusLayer?: HTMLDivElement;
 
   constructor(doc: Document, nodeId: string) {
     this.element = doc.createElement('div');
@@ -67,6 +84,93 @@ export class PreviewFrame {
       .map((corner) => `${Math.max(0, Math.min(corner * zoom, maxRadius) - inset)}px`)
       .join(' ');
     this.content.style.borderRadius = this.shield.style.borderRadius = innerRadius;
+    if (this.statusLayer) {
+      this.statusLayer.style.inset = `${inset}px`;
+      this.statusLayer.style.borderRadius = innerRadius;
+    }
+  }
+
+  /** 创建居中加载/状态浮层并插入 shield 之前，自动跟随节点内边距与圆角 */
+  protected createStatus(options: PreviewStatusOptions): PreviewStatusHandle {
+    const doc = this.element.ownerDocument;
+    const status = doc.createElement('div');
+    status.className = options.className;
+    status.setAttribute('role', 'status');
+    const badge = doc.createElement('span');
+    const spinner = doc.createElement('span');
+    spinner.setAttribute('aria-hidden', 'true');
+    const message = doc.createElement('span');
+    message.textContent = options.text;
+    badge.append(spinner, message);
+    status.append(badge);
+    Object.assign(status.style, {
+      position: 'absolute',
+      inset: this.content.style.inset || '0',
+      borderRadius: this.content.style.borderRadius || '',
+      pointerEvents: 'none',
+      background: 'color-mix(in srgb, var(--sn-canvas, Canvas) 48%, transparent)'
+    });
+    Object.assign(badge.style, {
+      position: 'absolute',
+      top: '50%',
+      left: '50%',
+      transform: 'translate(-50%, -50%)',
+      width: 'max-content',
+      maxWidth: 'calc(100% - 12px)',
+      boxSizing: 'border-box',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '8px',
+      padding: '6px 10px',
+      borderRadius: '9999px',
+      fontSize: '12px',
+      lineHeight: '16px',
+      color: 'var(--sn-text, CanvasText)',
+      background: 'var(--sn-surface, Canvas)',
+      boxShadow: 'var(--sn-shadow-tooltip, 0 2px 8px rgb(0 0 0 / 18%))'
+    });
+    Object.assign(spinner.style, {
+      width: '14px',
+      height: '14px',
+      flexShrink: '0',
+      borderRadius: '50%',
+      border: '2px solid var(--sn-border, currentColor)',
+      borderTopColor: 'var(--sn-accent, currentColor)'
+    });
+    this.statusLayer = status;
+    this.surface.insertBefore(status, this.shield);
+
+    const reduceMotion = doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const animation =
+      options.animate && !reduceMotion
+        ? spinner.animate?.([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], {
+            duration: 800,
+            iterations: Infinity
+          })
+        : undefined;
+    // 循环动画在加载结束或节点卸载时取消，finished 会以 AbortError 结束。
+    void animation?.finished.catch(() => {});
+    const startedAt = performance.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      clearTimeout(timer);
+      timer = undefined;
+      animation?.cancel();
+    };
+    options.signal.addEventListener('abort', cancel, { once: true });
+    const finish = (onHidden?: () => void) => {
+      if (options.signal.aborted || status.hidden || timer !== undefined) return;
+      timer = setTimeout(
+        () => {
+          timer = undefined;
+          animation?.cancel();
+          status.hidden = true;
+          onHidden?.();
+        },
+        Math.max(0, MIN_LOADING_DISPLAY_MS - (performance.now() - startedAt))
+      );
+    };
+    return { status, spinner, message, finish, cancel };
   }
 
   setInteractive(interactive: boolean): void {

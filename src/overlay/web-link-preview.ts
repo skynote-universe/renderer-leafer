@@ -1,5 +1,6 @@
-import { getPlainText, parseWebUrl, type NodeEntity } from '@skynote/core';
+import { getPlainText, parseWebUrl, type NodeEntity, type SkyNoteEngine } from '@skynote/core';
 import { PreviewFrame } from './preview-frame';
+import type { ContentPreviewInstance, ContentPreviewRenderer } from './preview-registry';
 
 export interface WebLinkPreviewInfo {
   readonly url: string;
@@ -21,11 +22,16 @@ export function readWebLink(node: Readonly<NodeEntity> | undefined): WebLinkPrev
   };
 }
 
-export class WebLinkPreview extends PreviewFrame {
+/** 网页预览沙箱策略：保留源身份以支持现代 ES Module 脚本、表单与新标签外链，同时限制顶层跳转与敏感硬件权限 */
+const WEB_LINK_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
+
+export class WebLinkPreview extends PreviewFrame implements ContentPreviewInstance {
   readonly canInteract = true;
   private readonly frame: HTMLIFrameElement;
   private readonly hint: HTMLSpanElement;
+  private readonly status: HTMLDivElement;
   private readonly controller = new AbortController();
+  private hintRequested = false;
 
   constructor(
     doc: Document,
@@ -37,7 +43,7 @@ export class WebLinkPreview extends PreviewFrame {
     this.element.className = 'skynote-web-link-preview';
     const { signal } = this.controller;
     this.frame = doc.createElement('iframe');
-    this.frame.setAttribute('sandbox', 'allow-scripts allow-forms');
+    this.frame.setAttribute('sandbox', WEB_LINK_SANDBOX);
     this.frame.referrerPolicy = 'no-referrer';
     this.frame.setAttribute('allow', "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'");
     this.frame.tabIndex = 0;
@@ -50,8 +56,16 @@ export class WebLinkPreview extends PreviewFrame {
     });
 
     this.content.append(this.frame);
+    const loading = this.createStatus({
+      className: 'skynote-web-link-preview-status',
+      text: '正在加载网页',
+      animate: true,
+      signal
+    });
+    this.status = loading.status;
 
     this.hint = doc.createElement('span');
+    this.hint.className = 'skynote-web-link-preview-hint';
     this.hint.textContent = '再次点击或按 Enter 操作网页';
     Object.assign(this.hint.style, {
       position: 'absolute',
@@ -71,6 +85,9 @@ export class WebLinkPreview extends PreviewFrame {
     });
     this.shield.append(this.hint);
     this.setInteractive(false);
+    const finishLoading = () => loading.finish(() => this.syncHint());
+    this.frame.addEventListener('load', finishLoading, { signal, once: true });
+    this.frame.addEventListener('error', finishLoading, { signal, once: true });
     this.content.addEventListener(
       'focusout',
       (event) => {
@@ -93,9 +110,20 @@ export class WebLinkPreview extends PreviewFrame {
     if (this.frame.title !== title) this.frame.title = title;
   }
 
+  update(_engine: SkyNoteEngine, node: Readonly<NodeEntity>): void {
+    const link = readWebLink(node);
+    if (link) this.setTitle(link.title);
+  }
+
   override setInteractive(interactive: boolean, showHint = false): void {
     super.setInteractive(interactive);
-    this.hint.hidden = !showHint;
+    this.hintRequested = !interactive && showHint;
+    this.syncHint();
+  }
+
+  /** 加载浮层展示期间隐藏居中交互提示，避免重叠遮挡加载动画 */
+  private syncHint(): void {
+    this.hint.hidden = !this.hintRequested || !this.status.hidden;
   }
 
   focus(): void {
@@ -106,4 +134,17 @@ export class WebLinkPreview extends PreviewFrame {
     this.controller.abort();
     this.element.remove();
   }
+}
+
+export function createWebLinkPreviewRenderer(): ContentPreviewRenderer {
+  return {
+    nodeType: 'web-link',
+    resolveSource(_engine, node) {
+      const link = readWebLink(node);
+      return link?.preview ? { source: link.url } : undefined;
+    },
+    create({ doc, node, source, onExit }) {
+      return new WebLinkPreview(doc, node.id, source!, onExit);
+    }
+  };
 }

@@ -19,10 +19,16 @@ if (typeof (globalThis as any).HTMLElement === 'undefined') {
       return false;
     }
     appendChild(child: any) {
+      child.parentNode = this;
       this.children.push(child);
       return child;
     }
-    removeChild() {}
+    removeChild(child: any) {
+      const index = this.children.indexOf(child);
+      if (index >= 0) this.children.splice(index, 1);
+      if (child && child.parentNode === this) child.parentNode = null;
+      return child;
+    }
     addEventListener() {}
     removeEventListener() {}
     setAttribute() {}

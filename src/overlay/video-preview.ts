@@ -1,8 +1,8 @@
-import type { AssetAdapter } from '@skynote/core';
+import type { AssetAdapter, NodeEntity, SkyNoteEngine } from '@skynote/core';
+import { getVideoAsset, getVideoFields } from '../node/video-fields';
 import type { VideoControlsMount } from '../types';
 import { PreviewFrame } from './preview-frame';
-
-const MIN_LOADING_DISPLAY_MS = 240;
+import type { ContentPreviewInstance, ContentPreviewRenderer } from './preview-registry';
 
 interface PreviewPoster {
   readonly src: string;
@@ -18,14 +18,16 @@ export interface PreviewPlayback {
   readonly muted: boolean;
 }
 
-export class VideoPreview extends PreviewFrame {
+export class VideoPreview extends PreviewFrame implements ContentPreviewInstance {
   private readonly hint: HTMLSpanElement;
+  private readonly status: HTMLDivElement;
   private readonly video: HTMLVideoElement;
   private readonly controller = new AbortController();
   private url?: string;
   private poster?: PreviewPoster;
   private hasPlayed = false;
   private failed = false;
+  private hintRequested = false;
   private restoreTime?: number;
   private releaseControls?: () => void;
 
@@ -75,16 +77,6 @@ export class VideoPreview extends PreviewFrame {
       }
     }
     this.video.setAttribute('aria-label', '视频');
-    const status = doc.createElement('div');
-    status.className = 'skynote-video-preview-status';
-    status.setAttribute('role', 'status');
-    const badge = doc.createElement('span');
-    const spinner = doc.createElement('span');
-    spinner.setAttribute('aria-hidden', 'true');
-    const message = doc.createElement('span');
-    message.textContent = '正在加载视频';
-    badge.append(spinner, message);
-    status.append(badge);
     Object.assign(this.hint.style, {
       position: 'absolute',
       top: '50%',
@@ -112,59 +104,19 @@ export class VideoPreview extends PreviewFrame {
       objectFit: 'contain',
       outlineStyle: 'none'
     });
-    Object.assign(status.style, {
-      position: 'absolute',
-      inset: '0',
-      pointerEvents: 'none',
-      background: 'color-mix(in srgb, var(--sn-canvas, Canvas) 48%, transparent)'
-    });
-    Object.assign(badge.style, {
-      position: 'absolute',
-      top: '50%',
-      left: '50%',
-      transform: 'translate(-50%, -50%)',
-      maxWidth: '90%',
-      boxSizing: 'border-box',
-      display: 'inline-flex',
-      alignItems: 'center',
-      gap: '8px',
-      padding: '6px 10px',
-      borderRadius: '9999px',
-      fontSize: '12px',
-      color: 'var(--sn-text, CanvasText)',
-      background: 'var(--sn-surface, Canvas)'
-    });
-    Object.assign(spinner.style, {
-      width: '14px',
-      height: '14px',
-      flexShrink: '0',
-      borderRadius: '50%',
-      border: '2px solid var(--sn-border, currentColor)',
-      borderTopColor: 'var(--sn-accent, currentColor)'
-    });
     this.content.append(this.video);
-    this.surface.insertBefore(status, this.shield);
 
     const { signal } = this.controller;
-    const reduceMotion = doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    const animation =
-      source && !reduceMotion
-        ? spinner.animate?.([{ transform: 'rotate(0deg)' }, { transform: 'rotate(360deg)' }], {
-            duration: 800,
-            iterations: Infinity
-          })
-        : undefined;
-    // 循环动画在加载结束或节点卸载时取消，finished 会以 AbortError 结束。
-    void animation?.finished.catch(() => {});
-    const loadingStarted = performance.now();
-    let loadingTimer: ReturnType<typeof setTimeout> | undefined;
-    const finishLoading = () => {
-      clearTimeout(loadingTimer);
-      animation?.cancel();
-    };
-    signal.addEventListener('abort', finishLoading, { once: true });
+    const loading = this.createStatus({
+      className: 'skynote-video-preview-status',
+      text: '正在加载视频',
+      animate: Boolean(source),
+      signal
+    });
+    const { status, spinner, message } = loading;
+    this.status = status;
     const showFailure = (text: string) => {
-      finishLoading();
+      loading.cancel();
       this.failed = true;
       this.video.controls = false;
       onExit(true);
@@ -181,6 +133,7 @@ export class VideoPreview extends PreviewFrame {
       spinner.remove();
       message.textContent = `${text}，请选中节点后替换视频`;
       status.hidden = false;
+      this.syncHint();
     };
     this.video.addEventListener(
       'loadedmetadata',
@@ -188,13 +141,7 @@ export class VideoPreview extends PreviewFrame {
         const time = this.restoreTime;
         this.restoreTime = undefined;
         if (time && Number.isFinite(this.video.duration)) this.video.currentTime = Math.min(time, this.video.duration);
-        loadingTimer = setTimeout(
-          () => {
-            animation?.cancel();
-            status.hidden = true;
-          },
-          Math.max(0, MIN_LOADING_DISPLAY_MS - (performance.now() - loadingStarted))
-        );
+        loading.finish(() => this.syncHint());
       },
       { signal, once: true }
     );
@@ -261,6 +208,10 @@ export class VideoPreview extends PreviewFrame {
     return !this.video.paused && !this.video.ended;
   }
 
+  get keepAliveWhenOffscreen(): boolean {
+    return this.playing;
+  }
+
   get canInteract(): boolean {
     return !this.failed;
   }
@@ -271,6 +222,16 @@ export class VideoPreview extends PreviewFrame {
     const time = this.restoreTime ?? currentTime;
     if (!(time || playbackRate !== 1 || volume !== 1 || muted)) return undefined;
     return { source: this.source, time, rate: playbackRate, volume, muted };
+  }
+
+  captureState(): PreviewPlayback | undefined {
+    return this.playback;
+  }
+
+  update(engine: SkyNoteEngine, node: Readonly<NodeEntity>): void {
+    const posterId = getVideoFields(node)?.posterAssetId;
+    const poster = posterId ? engine.documentStore.getView().assets?.[posterId] : undefined;
+    this.setPoster(poster?.mimeType.startsWith('image/') ? poster.src : undefined);
   }
 
   setPoster(src: string | undefined): void {
@@ -309,7 +270,13 @@ export class VideoPreview extends PreviewFrame {
 
   override setInteractive(interactive: boolean, showHint = false): void {
     super.setInteractive(interactive);
-    this.hint.hidden = !showHint;
+    this.hintRequested = !interactive && showHint;
+    this.syncHint();
+  }
+
+  /** 加载中或异常状态浮层展示期间隐藏居中交互提示，避免重叠遮挡 */
+  private syncHint(): void {
+    this.hint.hidden = !this.hintRequested || !this.status.hidden;
   }
 
   focus(): void {
@@ -331,4 +298,27 @@ export class VideoPreview extends PreviewFrame {
       if (this.source && this.url) this.assets.release?.(this.source, this.url);
     }
   }
+}
+
+export function createVideoPreviewRenderer(mountControls?: VideoControlsMount): ContentPreviewRenderer {
+  return {
+    nodeType: 'video',
+    resolveSource(engine, node) {
+      if (!engine.assets || getVideoFields(node)?.displayMode !== 'preview') return undefined;
+      return { source: getVideoAsset(engine, node)?.src };
+    },
+    create({ doc, engine, node, source, savedState, onExit, requestRender }) {
+      const playback =
+        savedState && typeof savedState === 'object' && (savedState as PreviewPlayback).source === source
+          ? (savedState as PreviewPlayback)
+          : undefined;
+      return new VideoPreview(doc, node.id, source, engine.assets!, mountControls, playback, onExit, requestRender);
+    },
+    shouldKeepSavedState(engine, node, savedState) {
+      const saved = savedState as PreviewPlayback | undefined;
+      return (
+        !!saved && getVideoFields(node)?.displayMode === 'preview' && getVideoAsset(engine, node)?.src === saved.source
+      );
+    }
+  };
 }

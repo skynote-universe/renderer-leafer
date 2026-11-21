@@ -83,7 +83,7 @@ describe('视频预览层', () => {
     engine.destroy();
   });
 
-  it('快速加载仍短暂显示加载提示，错误可立即替换提示', () => {
+  it('快速加载仍短暂显示加载提示，加载期间隐藏交互提示避免遮挡，错误可立即替换提示', () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const { engine, host, nodeId } = fixture({ upload: vi.fn(), resolve: async () => 'blob:source' });
     setMode(engine, [nodeId], 'preview');
@@ -91,13 +91,19 @@ describe('视频预览层', () => {
     preview.sync([nodeId], false);
     const media = host.querySelector('video')!;
     const status = host.querySelector<HTMLElement>('.skynote-video-preview-status')!;
+    const hint = host.querySelector<HTMLElement>('.skynote-video-preview-hint')!;
+    expect(status.hidden).toBe(false);
+    expect(hint.hidden).toBe(true);
     media.dispatchEvent(new Event('loadedmetadata'));
     vi.advanceTimersByTime(120);
     expect(status.hidden).toBe(false);
+    expect(hint.hidden).toBe(true);
     vi.advanceTimersByTime(140);
     expect(status.hidden).toBe(true);
+    expect(hint.hidden).toBe(false);
     media.dispatchEvent(new Event('error'));
     expect(status.hidden).toBe(false);
+    expect(hint.hidden).toBe(true);
     expect(status.textContent).toContain('视频无法播放');
     expect(status.textContent).toContain('替换视频');
     preview.destroy();
@@ -118,14 +124,17 @@ describe('视频预览层', () => {
     setMode(engine, [nodeId], 'preview');
     preview.sync([nodeId], false);
     await vi.waitFor(() => expect(host.querySelector('video')?.getAttribute('src')).toBe('blob:source'));
-    const media = host.querySelector('video');
+    const media = host.querySelector('video')!;
     const content = host.querySelector<HTMLElement>(`[${PREVIEW_CONTENT_ATTRIBUTE}]`)!;
     const hint = host.querySelector<HTMLElement>('.skynote-video-preview-hint')!;
-    expect(media?.controls).toBe(true);
+    expect(media.controls).toBe(true);
     expect(play).not.toHaveBeenCalled();
     expect(content.inert).toBe(true);
     expect(content.style.inset).toBe('0px');
-    expect(hint.hidden).toBe(false);
+    // 加载未完成前隐藏居中交互提示，避免遮挡加载动画
+    expect(hint.hidden).toBe(true);
+    media.dispatchEvent(new Event('loadedmetadata'));
+    await vi.waitFor(() => expect(hint.hidden).toBe(false));
     expect(hint.textContent).toBe('再次点击或按 Enter 操作视频');
     engine.session.setSelection({ nodeIds: [] });
     preview.sync([nodeId], false);
@@ -327,7 +336,9 @@ describe('网页链接预览', () => {
     previews.sync([page, nodeId], false);
     const frame = host.querySelector('iframe')!;
     const overlay = frame.closest<HTMLElement>('.skynote-web-link-preview')!;
-    expect(frame.getAttribute('sandbox')).toBe('allow-scripts allow-forms');
+    expect(frame.getAttribute('sandbox')).toBe(
+      'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox'
+    );
     expect(frame.referrerPolicy).toBe('no-referrer');
     expect(frame.title).toBe('测试网页');
     expect(frame.parentElement?.style.inset).toBe('2px');
@@ -362,6 +373,84 @@ describe('网页链接预览', () => {
     expect(host.querySelector('iframe')?.getAttribute('src')).toBe('https://other.test/');
     previews.sync([nodeId], false);
     expect(host.querySelector('iframe')).toBeNull();
+    previews.destroy();
+    engine.destroy();
+  });
+
+  it('网页预览加载完成前显示 loading 且隐藏居中提示词，加载完成后切换显示交互提示', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    const { engine, host } = fixture({ upload: vi.fn(), resolve: () => 'blob:source' });
+    engine.nodeTypes.register({
+      type: 'web-link',
+      label: '网页链接',
+      defaultData: {},
+      createContent: () => ({
+        width: 180,
+        height: 120,
+        webLink: { url: 'https://example.test/', displayMode: 'preview' }
+      })
+    });
+    const page = engine.documentStore.createNode({ nodeType: 'web-link', x: 25, y: 35 })!;
+    engine.documentStore.updateNode(page, { style: { strokeWidth: 2, radius: 12 } });
+    engine.session.setSelection({ nodeIds: [page] });
+    const previews = new ContentPreviews(engine, host, { enableWebLinkPreviews: true });
+    previews.sync([page], false);
+
+    const frame = host.querySelector('iframe')!;
+    const status = host.querySelector<HTMLElement>('.skynote-web-link-preview-status')!;
+    const hint = host.querySelector<HTMLElement>('.skynote-web-link-preview-hint')!;
+    expect(status.hidden).toBe(false);
+    expect(status.textContent).toContain('正在加载网页');
+    expect(status.style.inset).toBe('2px');
+    expect(status.style.borderRadius).toBe('10px');
+    expect(hint.hidden).toBe(true);
+
+    frame.dispatchEvent(new Event('load'));
+    vi.advanceTimersByTime(120);
+    expect(status.hidden).toBe(false);
+    expect(hint.hidden).toBe(true);
+    vi.advanceTimersByTime(140);
+    expect(status.hidden).toBe(true);
+    expect(hint.hidden).toBe(false);
+
+    previews.destroy();
+    engine.destroy();
+  });
+
+  it('跨源与同源网页预览均允许 allow-same-origin 以支持 ES Module 与页面自身存储', () => {
+    const { engine, host } = fixture({ upload: vi.fn(), resolve: () => 'blob:source' });
+    engine.nodeTypes.register({
+      type: 'web-link',
+      label: '网页链接',
+      defaultData: {},
+      createContent: () => ({ width: 180, height: 120 })
+    });
+    const crossOriginId = engine.documentStore.createNode({ nodeType: 'web-link', x: 0, y: 0 })!;
+    const sameOriginId = engine.documentStore.createNode({ nodeType: 'web-link', x: 200, y: 0 })!;
+    engine.documentStore.commit({
+      label: '设置跨源与同源网页',
+      patches: [
+        {
+          op: 'set',
+          path: ['content', 'nodes', crossOriginId, 'webLink'],
+          value: { url: 'https://example.test/docs', displayMode: 'preview' }
+        },
+        {
+          op: 'set',
+          path: ['content', 'nodes', sameOriginId, 'webLink'],
+          value: { url: `${window.location.origin}/board/1`, displayMode: 'preview' }
+        }
+      ]
+    });
+    const previews = new ContentPreviews(engine, host, { enableWebLinkPreviews: true });
+    previews.sync([crossOriginId, sameOriginId], false);
+
+    const crossFrame = host.querySelector<HTMLIFrameElement>(`[data-node-id="${crossOriginId}"] iframe`)!;
+    const sameFrame = host.querySelector<HTMLIFrameElement>(`[data-node-id="${sameOriginId}"] iframe`)!;
+    const expectedSandbox = 'allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox';
+    expect(crossFrame.getAttribute('sandbox')).toBe(expectedSandbox);
+    expect(sameFrame.getAttribute('sandbox')).toBe(expectedSandbox);
+
     previews.destroy();
     engine.destroy();
   });

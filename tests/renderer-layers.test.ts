@@ -19,12 +19,61 @@ describe('LeaferRenderer 场景树图层架构', () => {
     const backgroundLayer = renderer.backgroundLayer;
     const contentLayer = renderer.contentLayer;
 
-    // 验证场景树相对层级：backgroundLayer 必须在 contentLayer 之前添加 (最底)，overlayLayer 位于独立顶层透明覆盖层
+    // 验证场景树相对层级：无可见 DOM 预览时三层共处主 Canvas（0 额外显存）
     const sceneGroup = (backgroundLayer as any).parent;
     expect(sceneGroup).toBeDefined();
     expect(sceneGroup.children[0]).toBe(backgroundLayer);
     expect(sceneGroup.children[1]).toBe(contentLayer);
+    expect(sceneGroup.children[2]).toBe(renderer.overlayLayer);
+    expect(
+      Array.from(container.children).some((child) => (child as HTMLElement).className === 'skynote-overlay-layer')
+    ).toBe(false);
+
+    renderer.destroy();
+  });
+
+  it('自定义 DOM 预览首次出现时按需提升 overlayLayer 至顶层透明 Canvas，并常驻复用到销毁', () => {
+    const engine = new SkyNoteEngine();
+    const container = document.createElement('div');
+    Object.defineProperty(container, 'clientWidth', { value: 1000 });
+    Object.defineProperty(container, 'clientHeight', { value: 800 });
+    const renderer = new LeaferRenderer(engine, container, { enableFrameScheduler: false });
+
+    const unregister = renderer.previewRenderers.register({
+      nodeType: 'custom-embed',
+      resolveSource: () => ({ source: 'embed:1' }),
+      create: ({ doc, source }) => {
+        const element = doc.createElement('div');
+        return {
+          element,
+          source,
+          canInteract: true,
+          position: () => {},
+          setInteractive: () => {},
+          focus: () => {},
+          destroy: () => {}
+        };
+      }
+    });
+
+    engine.documentStore.addNode({
+      id: 'embed-1',
+      type: 'node',
+      nodeType: 'custom-embed',
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 120,
+      rotation: 0,
+      zIndex: 'a0',
+      locked: false
+    });
+    renderer.renderFrame();
+
+    const sceneGroup = (renderer.backgroundLayer as any).parent;
     expect(renderer.overlayLayer.parent).not.toBe(sceneGroup);
+    expect(renderer.overlayLayer.leafer).toBeTruthy();
+    expect(renderer.overlayLayer.leafer).not.toBe(renderer.contentLayer.leafer);
     const overlayHost = Array.from(container.children).find(
       (child) => (child as HTMLElement).className === 'skynote-overlay-layer'
     ) as HTMLElement | undefined;
@@ -35,7 +84,41 @@ describe('LeaferRenderer 场景树图层架构', () => {
       expect((child as HTMLElement).style.pointerEvents).toBe('none');
     }
 
+    const firstOverlayLeafer = renderer.overlayLayer.leafer;
+    engine.documentStore.removeEntities({ nodeIds: ['embed-1'] });
+    renderer.renderFrame();
+    // 预览移除后保留已创建的顶层 overlayLeafer，避免平移/缩放/切换时反复创建销毁 Canvas
+    expect(renderer.overlayLayer.parent).not.toBe(sceneGroup);
+    expect(renderer.overlayLayer.leafer).toBe(firstOverlayLeafer);
+    expect(
+      Array.from(container.children).filter((child) => (child as HTMLElement).className === 'skynote-overlay-layer')
+    ).toHaveLength(1);
+
+    // 再次出现 DOM 预览时直接复用同一个 overlayLeafer 实例
+    engine.documentStore.addNode({
+      id: 'embed-2',
+      type: 'node',
+      nodeType: 'custom-embed',
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 120,
+      rotation: 0,
+      zIndex: 'a1',
+      locked: false
+    });
+    renderer.renderFrame();
+    expect(renderer.overlayLayer.leafer).toBe(firstOverlayLeafer);
+    expect(
+      Array.from(container.children).filter((child) => (child as HTMLElement).className === 'skynote-overlay-layer')
+    ).toHaveLength(1);
+
+    unregister();
     renderer.destroy();
+    expect(
+      Array.from(container.children).some((child) => (child as HTMLElement).className === 'skynote-overlay-layer')
+    ).toBe(false);
+    engine.destroy();
   });
 
   it('通过 DocumentStore 修改 zIndex 后内容层自动重排', () => {

@@ -36,7 +36,8 @@ import { ContentOrderSync } from './layers/content-order-sync';
 import { ImageNodeRenderer } from './node/image-node-renderer';
 import { VideoPosterRenderer } from './node/video-poster-renderer';
 import { WebLinkCoverRenderer } from './node/web-link-cover-renderer';
-import { ContentPreviews } from './overlay/content-previews';
+import { ContentPreviews, createDefaultPreviewRegistry } from './overlay/content-previews';
+import type { PreviewRendererRegistry } from './overlay/preview-registry';
 import { readWebLink } from './overlay/web-link-preview';
 import { getVideoAsset, getVideoFields, videoCardPlayRadius } from './node/video-fields';
 import { exportScene, LEAFER_EXPORT_FORMATS } from './export/scene-export';
@@ -49,24 +50,25 @@ const FRUSTUM_PADDING = 100;
 
 export class LeaferRenderer implements CanvasRenderer {
   readonly nodeRenderers = new LeaferNodeRendererRegistry();
+  readonly previewRenderers: PreviewRendererRegistry;
   /** 底层装饰 (点阵、网格) */
   readonly backgroundLayer = new Group();
   /** 节点与连线按层级排列所在的内容层 */
   readonly contentLayer = new Group();
-  /** 顶层覆盖层 (选中框、控制柄、框选与参考线)，位于 DOM 预览层之上 */
+  /** 覆盖层 (选中框、控制柄、框选与参考线)；存在可见 DOM 预览时按需提升至顶层透明 Canvas */
   readonly overlayLayer = new Group();
   readonly images: ImageNodeRenderer;
   readonly exportFormats = LEAFER_EXPORT_FORMATS;
 
   private readonly leafer: Leafer;
-  private readonly overlayLeafer: Leafer;
-  private readonly overlayHost: HTMLDivElement;
+  private overlayLeafer?: Leafer;
+  private overlayHost?: HTMLDivElement;
   private readonly previousContainerPosition?: string;
   private readonly previousContainerIsolation?: string;
   /** 承载视口变换的场景根 */
   private readonly scene = new Group();
-  /** 顶层覆盖层场景根 */
-  private readonly overlayScene = new Group();
+  /** 顶层覆盖层场景根（随 overlayLeafer 按需创建与销毁，避免复用已销毁的 Group） */
+  private overlayScene?: Group;
   private readonly overlay: LeaferOverlay;
   private readonly assetRenderers: readonly ImageNodeRenderer[];
   private contentPreviews?: ContentPreviews;
@@ -106,7 +108,8 @@ export class LeaferRenderer implements CanvasRenderer {
     this.frameScheduler = new FrameCommitScheduler({ enabled: options?.enableFrameScheduler !== false });
     this.lodController = options?.lod === false ? undefined : new AdaptiveLodController(options?.lod);
 
-    // 场景树三层结构：底层内容 Canvas (背景层 + 内容层) → 中间 DOM 原位预览层 (zIndex: 1) → 顶层透明覆盖层 Canvas (zIndex: 2)
+    this.previewRenderers = createDefaultPreviewRegistry(options?.previews);
+    // 平时单 Canvas 承载全部三层（0 额外显存）；存在可见 DOM 预览时再按需把 overlayLayer 提升至顶层透明 Canvas
     const pixelRatio = options?.pixelRatio ?? window.devicePixelRatio;
     const width = container.clientWidth;
     const height = container.clientHeight;
@@ -116,7 +119,7 @@ export class LeaferRenderer implements CanvasRenderer {
       this.previousContainerPosition = container.style.position;
       container.style.position = 'relative';
     }
-    // 建立独立层叠上下文，防止内部预览层 (zIndex: 1) 与顶层覆盖层 (zIndex: 2) 越界遮挡宿主工具栏
+    // 建立独立层叠上下文，防止内部预览层 (zIndex: 1) 与按需顶层覆盖层 (zIndex: 2) 越界遮挡宿主工具栏
     if (computedStyle?.isolation !== 'isolate') {
       this.previousContainerIsolation = container.style.isolation;
       container.style.isolation = 'isolate';
@@ -129,31 +132,8 @@ export class LeaferRenderer implements CanvasRenderer {
       pixelSnap: true,
       fill: session.theme.background
     });
-    this.scene.add([this.backgroundLayer, this.contentLayer]);
+    this.scene.add([this.backgroundLayer, this.contentLayer, this.overlayLayer]);
     this.leafer.add(this.scene);
-
-    this.overlayHost = doc.createElement('div');
-    this.overlayHost.className = 'skynote-overlay-layer';
-    Object.assign(this.overlayHost.style, {
-      position: 'absolute',
-      inset: '0',
-      zIndex: '2',
-      pointerEvents: 'none',
-      overflow: 'hidden'
-    });
-    container.appendChild(this.overlayHost);
-    this.overlayLeafer = new Leafer({
-      view: this.overlayHost,
-      width,
-      height,
-      pixelRatio,
-      pixelSnap: true,
-      // 必须关闭 hittable，否则 Leafer 会给内部 canvas 写入 pointer-events: auto 拦截下层 DOM 预览点击
-      hittable: false
-    });
-    if (this.overlayLeafer.canvas?.view) this.overlayLeafer.canvas.view.style.pointerEvents = 'none';
-    this.overlayScene.add(this.overlayLayer);
-    this.overlayLeafer.add(this.overlayScene);
     this.applyViewportTransform();
     session.setViewportSize({ width, height });
 
@@ -213,6 +193,10 @@ export class LeaferRenderer implements CanvasRenderer {
     this.disposers.push(
       // 宿主能力 (光标、指针捕获、覆盖层) 挂到引擎上，交互插件经插件上下文使用
       engine.attachHost(this.bridge),
+      this.previewRenderers.onChange(() => {
+        this.indexContentPreviews();
+        this.requestRender();
+      }),
       // 文档增量变更：登记待销毁实体与层级脏标记，合并到下一帧
       engine.documentStore.subscribe((_view, _record, changes) => {
         this.nodeLayer.recordChanges(changes);
@@ -298,7 +282,7 @@ export class LeaferRenderer implements CanvasRenderer {
       const height = Math.floor(entry.contentRect.height);
       if (width <= 0 || height <= 0) return;
       this.leafer.resize({ width, height });
-      this.overlayLeafer.resize({ width, height });
+      this.overlayLeafer?.resize({ width, height });
       session.setViewportSize({ width, height });
     });
     this.resizeObserver.observe(container);
@@ -314,7 +298,7 @@ export class LeaferRenderer implements CanvasRenderer {
           pixelRatio: window.devicePixelRatio
         };
         this.leafer.resize(size);
-        this.overlayLeafer.resize(size);
+        this.overlayLeafer?.resize(size);
         watchPixelRatio();
       };
       const watchPixelRatio = (): void => {
@@ -461,14 +445,16 @@ export class LeaferRenderer implements CanvasRenderer {
       if (previewIds.length || this.contentPreviews?.hasVisiblePreview) {
         // 提交这帧的 Leafer 局部绘制后再更新 DOM，避免两套调度各自采用不同版本的坐标。
         if (this.leafer.renderer.changed) this.leafer.renderer.render();
-        if (this.overlayLeafer.renderer.changed) this.overlayLeafer.renderer.render();
-        this.contentPreviews ??= new ContentPreviews(engine, this.container, this.options?.previews, () =>
+        this.contentPreviews ??= new ContentPreviews(engine, this.container, this.previewRenderers, () =>
           this.requestRender()
         );
       }
       this.contentPreviews?.updateViewport();
       this.contentPreviews?.sync(previewIds, this.isInteracting);
     } else this.contentPreviews?.clear();
+
+    if (this.contentPreviews?.hasVisiblePreview) this.ensureOverlayElevated();
+    if (this.overlayLeafer?.renderer.changed) this.overlayLeafer.renderer.render();
 
     this.lodController?.recordFrame(performance.now() - frameStart, frameStart);
     // 分帧队列未清空时继续调度
@@ -490,9 +476,17 @@ export class LeaferRenderer implements CanvasRenderer {
     for (const renderer of this.assetRenderers) renderer.dispose();
     this.connectorLayer.destroyAll();
     this.nodeRenderers.clear();
-    this.overlayLeafer.destroy();
-    if (this.overlayHost.parentNode) this.overlayHost.parentNode.removeChild(this.overlayHost);
-    else this.overlayHost.remove?.();
+    this.previewRenderers.clear();
+    if (this.overlayLeafer) {
+      this.overlayLeafer.destroy();
+      this.overlayLeafer = undefined;
+      this.overlayScene = undefined;
+    }
+    if (this.overlayHost) {
+      if (this.overlayHost.parentNode) this.overlayHost.parentNode.removeChild(this.overlayHost);
+      else this.overlayHost.remove?.();
+      this.overlayHost = undefined;
+    }
     this.leafer.destroy();
     if (this.previousContainerPosition !== undefined && this.container.style.position === 'relative')
       this.container.style.position = this.previousContainerPosition;
@@ -500,18 +494,54 @@ export class LeaferRenderer implements CanvasRenderer {
       this.container.style.isolation = this.previousContainerIsolation;
   }
 
+  /** 首次出现可见 DOM 预览时将覆盖层提升至独立顶层透明 Canvas，创建后常驻至销毁，避免交互期间反复创建与销毁 */
+  private ensureOverlayElevated(): void {
+    if (this.overlayLeafer) return;
+    const doc = this.container.ownerDocument;
+    const host = doc.createElement('div');
+    host.className = 'skynote-overlay-layer';
+    Object.assign(host.style, {
+      position: 'absolute',
+      inset: '0',
+      zIndex: '2',
+      pointerEvents: 'none',
+      overflow: 'hidden'
+    });
+    this.container.appendChild(host);
+    const { width, height } = this.engine.session.viewportSize;
+    const overlayLeafer = new Leafer({
+      view: host,
+      width: width || this.container.clientWidth,
+      height: height || this.container.clientHeight,
+      pixelRatio: this.options?.pixelRatio ?? window.devicePixelRatio,
+      pixelSnap: true,
+      // 必须关闭 hittable，否则 Leafer 会给内部 canvas 写入 pointer-events: auto 拦截下层 DOM 预览点击
+      hittable: false
+    });
+    if (overlayLeafer.canvas?.view) overlayLeafer.canvas.view.style.pointerEvents = 'none';
+    const overlayScene = new Group();
+    const { x, y, zoom } = this.engine.session.viewport;
+    overlayScene.set({ x, y, scaleX: zoom, scaleY: zoom });
+    overlayScene.add(this.overlayLayer);
+    overlayLeafer.add(overlayScene);
+    this.overlayScene = overlayScene;
+    this.overlayHost = host;
+    this.overlayLeafer = overlayLeafer;
+    if (this.leafer.renderer.changed) this.leafer.renderer.render();
+  }
+
   private applyViewportTransform(): void {
     const { x, y, zoom } = this.engine.session.viewport;
     this.scene.set({ x, y, scaleX: zoom, scaleY: zoom });
-    this.overlayScene.set({ x, y, scaleX: zoom, scaleY: zoom });
+    this.overlayScene?.set({ x, y, scaleX: zoom, scaleY: zoom });
     this.viewportTransformPending = false;
   }
 
   private indexPreview(id: string): void {
     const node = this.engine.entityStore.getNode(id)?.entity;
-    const web = this.options?.previews?.enableWebLinkPreviews && readWebLink(node)?.preview;
-    const video = this.engine.assets && node?.nodeType === 'video' && getVideoFields(node)?.displayMode === 'preview';
-    if (web || video) this.previewIds.add(id);
+    const hasPreview =
+      !!node && this.previewRenderers.get(node.nodeType)?.resolveSource(this.engine, node) !== undefined;
+    if (hasPreview) this.previewIds.add(id);
     else this.previewIds.delete(id);
   }
 

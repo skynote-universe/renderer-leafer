@@ -1,17 +1,33 @@
 import { compareHierarchicalNodes, type DocumentChangeSet, type NodeEntity, type SkyNoteEngine } from '@skynote/core';
-import { getVideoAsset, getVideoFields } from '../node/video-fields';
 import type { ContentPreviewOptions } from '../types';
 import { previewOutline } from './preview-clip';
-import { VideoPreview, type PreviewPlayback } from './video-preview';
-import { readWebLink, WebLinkPreview } from './web-link-preview';
+import { PreviewRendererRegistry, type ContentPreviewInstance, type ContentPreviewRenderer } from './preview-registry';
+import { createVideoPreviewRenderer } from './video-preview';
+import { createWebLinkPreviewRenderer } from './web-link-preview';
 
-type ContentPreview = VideoPreview | WebLinkPreview;
+interface MountedPreview {
+  readonly renderer: ContentPreviewRenderer;
+  readonly instance: ContentPreviewInstance;
+}
+
+interface SavedPreviewState {
+  readonly renderer: ContentPreviewRenderer;
+  readonly state: unknown;
+}
+
+export function createDefaultPreviewRegistry(options?: ContentPreviewOptions): PreviewRendererRegistry {
+  const registry = new PreviewRendererRegistry();
+  registry.register(createVideoPreviewRenderer(options?.mountVideoControls));
+  if (options?.enableWebLinkPreviews) registry.register(createWebLinkPreviewRenderer());
+  return registry;
+}
 
 export class ContentPreviews {
   private readonly root: HTMLDivElement;
   private readonly world: HTMLDivElement;
-  private readonly previews = new Map<string, ContentPreview>();
-  private readonly playback = new Map<string, PreviewPlayback>();
+  private readonly registry: PreviewRendererRegistry;
+  private readonly previews = new Map<string, MountedPreview>();
+  private readonly savedStates = new Map<string, SavedPreviewState>();
   private readonly previousPosition?: string;
   private focusedId?: string;
   private visibleCount = 0;
@@ -19,9 +35,13 @@ export class ContentPreviews {
   constructor(
     private readonly engine: SkyNoteEngine,
     private readonly container: HTMLElement,
-    private readonly options: ContentPreviewOptions = {},
+    registryOrOptions: PreviewRendererRegistry | ContentPreviewOptions = {},
     private readonly requestRender: () => void = () => {}
   ) {
+    this.registry =
+      registryOrOptions instanceof PreviewRendererRegistry
+        ? registryOrOptions
+        : createDefaultPreviewRegistry(registryOrOptions);
     const doc = container.ownerDocument;
     this.root = doc.createElement('div');
     this.world = doc.createElement('div');
@@ -35,12 +55,12 @@ export class ContentPreviews {
       pointerEvents: 'none'
     });
     Object.assign(this.world.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
-    this.root.append(this.world);
+    this.root.appendChild(this.world);
     if (doc.defaultView?.getComputedStyle(container).position === 'static') {
       this.previousPosition = container.style.position;
       container.style.position = 'relative';
     }
-    container.append(this.root);
+    container.appendChild(this.root);
     this.updateViewport();
   }
 
@@ -55,23 +75,23 @@ export class ContentPreviews {
 
   canFocus(id: string): boolean {
     const { session } = this.engine;
-    const preview = this.previews.get(id);
+    const entry = this.previews.get(id);
     return (
       session.tool === 'select' &&
       !session.inMaintenance &&
       session.selectedNodeIds.has(id) &&
-      preview?.element.hidden === false &&
-      preview.canInteract
+      entry?.instance.element.hidden === false &&
+      entry.instance.canInteract
     );
   }
 
   focus(id: string): boolean {
     if (!this.canFocus(id)) return false;
     if (this.focusedId && this.focusedId !== id) this.blur(this.focusedId);
-    const preview = this.previews.get(id)!;
+    const entry = this.previews.get(id)!;
     this.focusedId = id;
-    preview.setInteractive(true);
-    preview.focus();
+    entry.instance.setInteractive(true);
+    entry.instance.focus();
     return true;
   }
 
@@ -84,24 +104,29 @@ export class ContentPreviews {
   private blur(id: string, restoreFocus = false): void {
     if (this.focusedId !== id) return;
     this.focusedId = undefined;
-    this.previews.get(id)?.setInteractive(false, this.canFocus(id));
+    this.previews.get(id)?.instance.setInteractive(false, this.canFocus(id));
     if (restoreFocus) this.container.focus({ preventScroll: true });
   }
 
   reconcilePlayback(changes: DocumentChangeSet): void {
-    for (const id of changes.nodes.removed) this.playback.delete(id);
-    const affected = changes.assets.size ? this.playback.keys() : changes.nodes.data;
+    for (const id of changes.nodes.removed) this.savedStates.delete(id);
+    const affected = changes.assets.size ? this.savedStates.keys() : changes.nodes.data;
     for (const id of affected) {
-      const saved = this.playback.get(id);
+      const saved = this.savedStates.get(id);
       if (!saved) continue;
       const node = this.engine.entityStore.getNode(id)?.entity;
-      if (getVideoFields(node)?.displayMode !== 'preview' || getVideoAsset(this.engine, node)?.src !== saved.source)
-        this.playback.delete(id);
+      if (
+        !node ||
+        this.registry.get(node.nodeType) !== saved.renderer ||
+        !saved.renderer.shouldKeepSavedState?.(this.engine, node, saved.state)
+      ) {
+        this.savedStates.delete(id);
+      }
     }
   }
 
   sync(candidateIds: Iterable<string>, isInteracting: boolean): void {
-    const { session, assets } = this.engine;
+    const { session } = this.engine;
     if (session.inMaintenance) {
       this.clear();
       return;
@@ -112,10 +137,9 @@ export class ContentPreviews {
     for (const id of candidateIds) {
       const node = getNode(id);
       if (!node || !this.engine.visibility.isNodeVisible(id)) continue;
-      const web = this.options.enableWebLinkPreviews ? readWebLink(node) : undefined;
-      const isVideo = node.nodeType === 'video' && getVideoFields(node)?.displayMode === 'preview' && !!assets;
-      if (!isVideo && !web?.preview) continue;
-      const source = web?.url ?? getVideoAsset(this.engine, node)?.src;
+      const renderer = this.registry.get(node.nodeType);
+      const resolved = renderer?.resolveSource(this.engine, node);
+      if (!renderer || !resolved) continue;
       const outline = previewOutline(this.engine, node, false);
       const { width, height } = session.viewportSize;
       if (
@@ -126,68 +150,60 @@ export class ContentPreviews {
         outline.every((p) => p.y >= height)
       )
         continue;
-      let preview = this.previews.get(id);
-      if (preview && (preview.source !== source || preview instanceof VideoPreview !== isVideo)) {
-        this.remove(id, preview);
-        preview = undefined;
+      let entry = this.previews.get(id);
+      if (entry && (entry.renderer !== renderer || entry.instance.source !== resolved.source)) {
+        this.remove(id, entry.instance);
+        entry = undefined;
       }
-      if (!preview) {
-        const saved = this.playback.get(id);
-        this.playback.delete(id);
+      if (!entry) {
+        const saved = this.savedStates.get(id);
+        this.savedStates.delete(id);
         const onExit = (restoreFocus?: boolean) => this.blur(id, restoreFocus);
-        const doc = this.container.ownerDocument;
-        preview = web
-          ? new WebLinkPreview(doc, id, web.url, onExit)
-          : new VideoPreview(
-              doc,
-              id,
-              source,
-              assets!,
-              this.options.mountVideoControls,
-              saved?.source === source ? saved : undefined,
-              onExit,
-              this.requestRender
-            );
-        this.previews.set(id, preview);
-        this.world.append(preview.element);
+        const instance = renderer.create({
+          doc: this.container.ownerDocument,
+          engine: this.engine,
+          node,
+          source: resolved.source,
+          savedState: saved?.renderer === renderer ? saved.state : undefined,
+          onExit,
+          requestRender: this.requestRender
+        });
+        entry = { renderer, instance };
+        this.previews.set(id, entry);
+        this.world.appendChild(instance.element);
       }
-      if (preview instanceof VideoPreview) {
-        const posterId = getVideoFields(node)?.posterAssetId;
-        const poster = posterId ? this.engine.documentStore.getView().assets?.[posterId] : undefined;
-        preview.setPoster(poster?.mimeType.startsWith('image/') ? poster.src : undefined);
-      } else if (web) preview.setTitle(web.title);
-      preview.element.hidden = false;
-      preview.position(this.engine, node, outline);
+      entry.instance.update?.(this.engine, node);
+      entry.instance.element.hidden = false;
+      entry.instance.position(this.engine, node, outline);
       const canFocus = !isInteracting && this.canFocus(id);
-      preview.setInteractive(canFocus && this.focusedId === id, canFocus && this.focusedId !== id);
+      entry.instance.setInteractive(canFocus && this.focusedId === id, canFocus && this.focusedId !== id);
       shown.add(id);
       visible.push(node);
     }
-    for (const [id, preview] of this.previews) {
+    for (const [id, entry] of this.previews) {
       if (shown.has(id)) continue;
       const node = getNode(id);
-      const sameSource =
-        preview instanceof VideoPreview &&
-        preview.source !== undefined &&
-        getVideoFields(node)?.displayMode === 'preview' &&
-        getVideoAsset(this.engine, node)?.src === preview.source;
-      if (sameSource && preview.playing && this.engine.visibility.isNodeVisible(id)) {
-        const heldFocus = preview.element.contains(this.container.ownerDocument.activeElement);
+      const renderer = node ? this.registry.get(node.nodeType) : undefined;
+      const resolved = node && renderer === entry.renderer ? renderer.resolveSource(this.engine, node) : undefined;
+      const sameSource = !!resolved && resolved.source !== undefined && resolved.source === entry.instance.source;
+      if (sameSource && entry.instance.keepAliveWhenOffscreen && this.engine.visibility.isNodeVisible(id)) {
+        const heldFocus = entry.instance.element.contains(this.container.ownerDocument.activeElement);
         this.blur(id, heldFocus);
-        preview.element.hidden = true;
+        entry.instance.element.hidden = true;
       } else {
-        const playback = sameSource ? preview.playback : undefined;
-        if (playback) this.playback.set(id, playback);
-        this.remove(id, preview);
+        const state = sameSource ? entry.instance.captureState?.() : undefined;
+        if (state !== undefined) this.savedStates.set(id, { renderer: entry.renderer, state });
+        this.remove(id, entry.instance);
       }
     }
     if (this.focusedId && !this.canFocus(this.focusedId)) this.blur(this.focusedId);
     this.visibleCount = visible.length;
     visible.sort((a, b) => compareHierarchicalNodes(a, b, getNode));
-    for (const [index, node] of visible.entries()) this.previews.get(node.id)!.element.style.zIndex = String(index);
+    for (const [index, node] of visible.entries())
+      this.previews.get(node.id)!.instance.element.style.zIndex = String(index);
   }
 
-  private remove(id: string, preview: ContentPreview): void {
+  private remove(id: string, preview: ContentPreviewInstance): void {
     const heldFocus = preview.element.contains(this.container.ownerDocument.activeElement);
     this.blur(id);
     this.previews.delete(id);
@@ -196,14 +212,15 @@ export class ContentPreviews {
   }
 
   clear(): void {
-    for (const [id, preview] of this.previews) this.remove(id, preview);
-    this.playback.clear();
+    for (const [id, entry] of this.previews) this.remove(id, entry.instance);
+    this.savedStates.clear();
     this.visibleCount = 0;
   }
 
   destroy(): void {
     this.clear();
-    this.root.remove();
+    if (this.root.parentNode) this.root.parentNode.removeChild(this.root);
+    else this.root.remove?.();
     if (this.previousPosition !== undefined && this.container.style.position === 'relative')
       this.container.style.position = this.previousPosition;
   }
