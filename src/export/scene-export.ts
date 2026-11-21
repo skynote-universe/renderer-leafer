@@ -100,10 +100,10 @@ export async function exportScene(
   leafer.add(content);
   const registry = new LeaferNodeRendererRegistry();
   const images = new ImageNodeRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets);
-  const posters = new VideoPosterRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets, {
+  const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
+  const posters = new VideoPosterRenderer(engine, mapper, {
     renderPreviewPoster: true
   });
-  const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
   const webCovers = new WebLinkCoverRenderer(engine, mapper);
   const assetRenderers = [images, posters, webCovers];
   for (const renderer of assetRenderers) registry.register(renderer);

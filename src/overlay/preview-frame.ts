@@ -79,6 +79,7 @@ export class PreviewFrame {
     this.surface.style.height = `${height}px`;
     this.surface.style.transform = `matrix(${matrix.a},${matrix.b},${matrix.c},${matrix.d},${matrix.e * zoom},${matrix.f * zoom})`;
     this.content.style.inset = this.shield.style.inset = `${inset}px`;
+    this.shield.style.cursor = engine.session.isReadOnly ? 'pointer' : '';
     // 内容与边框共用圆心，内圆角随内缩量收小。外层多边形继续负责祖先裁切。
     const innerRadius = expandCornerRadius(radius)
       .map((corner) => `${Math.max(0, Math.min(corner * zoom, maxRadius) - inset)}px`)

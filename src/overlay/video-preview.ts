@@ -1,4 +1,4 @@
-import type { AssetAdapter, NodeEntity, SkyNoteEngine } from '@skynote/core';
+import { getPlainText, type AssetAdapter, type NodeEntity, type SkyNoteEngine } from '@skynote/core';
 import { getVideoAsset, getVideoFields } from '../node/video-fields';
 import type { VideoControlsMount } from '../types';
 import { PreviewFrame } from './preview-frame';
@@ -232,6 +232,9 @@ export class VideoPreview extends PreviewFrame implements ContentPreviewInstance
     const posterId = getVideoFields(node)?.posterAssetId;
     const poster = posterId ? engine.documentStore.getView().assets?.[posterId] : undefined;
     this.setPoster(poster?.mimeType.startsWith('image/') ? poster.src : undefined);
+    const titleBlock = node.textBlocks?.find((block) => block.slot === 'title');
+    const label = (titleBlock ? getPlainText(titleBlock).trim() : '') || '视频';
+    if (this.video.getAttribute('aria-label') !== label) this.video.setAttribute('aria-label', label);
   }
 
   setPoster(src: string | undefined): void {

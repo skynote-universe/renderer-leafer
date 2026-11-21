@@ -454,4 +454,52 @@ describe('网页链接预览', () => {
     previews.destroy();
     engine.destroy();
   });
+
+  it('只读模式下无需选中即可聚焦网页和视频预览，不显示常驻提示胶囊且退出聚焦后保持整洁', () => {
+    const { engine, host, nodeId } = fixture({ upload: vi.fn(), resolve: () => 'blob:source' });
+    engine.nodeTypes.register({
+      type: 'web-link',
+      label: '网页链接',
+      defaultData: {},
+      createContent: () => ({
+        width: 180,
+        height: 120,
+        webLink: { url: 'https://example.test/', displayMode: 'preview' }
+      })
+    });
+    const pageId = engine.documentStore.createNode({ nodeType: 'web-link', x: 200, y: 30 })!;
+    setMode(engine, [nodeId], 'preview');
+    engine.session.setReadOnly(true);
+    engine.session.setSelection({ nodeIds: [] });
+
+    const previews = new ContentPreviews(engine, host, { enableWebLinkPreviews: true });
+    previews.sync([nodeId, pageId], false);
+
+    const videoShield = host.querySelector<HTMLElement>(`[data-node-id="${nodeId}"] [${PREVIEW_TARGET_ATTRIBUTE}]`)!;
+    const pageShield = host.querySelector<HTMLElement>(`[data-node-id="${pageId}"] [${PREVIEW_TARGET_ATTRIBUTE}]`)!;
+    const videoHint = host.querySelector<HTMLElement>('.skynote-video-preview-hint')!;
+    const pageHint = host.querySelector<HTMLElement>('.skynote-web-link-preview-hint')!;
+
+    expect(videoShield.style.cursor).toBe('pointer');
+    expect(pageShield.style.cursor).toBe('pointer');
+    expect(videoHint.hidden).toBe(true);
+    expect(pageHint.hidden).toBe(true);
+    expect(previews.canFocus(nodeId)).toBe(true);
+    expect(previews.canFocus(pageId)).toBe(true);
+
+    expect(previews.focus(pageId)).toBe(true);
+    expect(pageShield.hidden).toBe(true);
+    expect(previews.exitFocus()).toBe(true);
+    expect(pageShield.hidden).toBe(false);
+    expect(pageHint.hidden).toBe(true);
+
+    expect(previews.focus(nodeId)).toBe(true);
+    expect(videoShield.hidden).toBe(true);
+    expect(previews.exitFocus()).toBe(true);
+    expect(videoShield.hidden).toBe(false);
+    expect(videoHint.hidden).toBe(true);
+
+    previews.destroy();
+    engine.destroy();
+  });
 });

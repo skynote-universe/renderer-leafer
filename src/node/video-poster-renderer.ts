@@ -1,5 +1,6 @@
-import type { AssetAdapter, NodeEntity } from '@skynote/core';
-import { Ellipse, Path } from 'leafer-ui';
+import { applyThemeToPrimitives, editingTextPrimitive, type NodeEntity, type SkyNoteEngine } from '@skynote/core';
+import { Ellipse, Group, Path } from 'leafer-ui';
+import type { PrimitiveMapper } from '../primitives/primitive-mapper';
 import { ImageNodeRenderer } from './image-node-renderer';
 import { getVideoFields, videoCardPlayRadius } from './video-fields';
 import type { LeaferRenderContext, LeaferShape } from '../types';
@@ -8,14 +9,18 @@ export class VideoPosterRenderer extends ImageNodeRenderer {
   override readonly nodeType = 'video';
 
   constructor(
-    getAsset: (id: string) => { src: string } | undefined,
-    assets: AssetAdapter | undefined,
+    private readonly engine: SkyNoteEngine,
+    private readonly mapper: PrimitiveMapper,
     private readonly options: {
-      getNode?: (id: string) => NodeEntity | undefined;
       renderPreviewPoster?: boolean;
     } = {}
   ) {
-    super(getAsset, assets, undefined, options.getNode);
+    super(
+      (id) => engine.documentStore.getView().assets?.[id],
+      engine.assets,
+      undefined,
+      (id) => engine.entityStore.getNode(id)?.entity
+    );
   }
 
   protected override getImage(node: NodeEntity) {
@@ -29,7 +34,7 @@ export class VideoPosterRenderer extends ImageNodeRenderer {
 
   override create(node: NodeEntity, context: LeaferRenderContext): LeaferShape[] {
     const shapes = super.create(node, context);
-    shapes.push(new Ellipse({ hittable: false }), new Path({ hittable: false }));
+    shapes.push(new Ellipse({ hittable: false }), new Path({ hittable: false }), new Group({ hittable: false }));
     this.updateVisibility(shapes, node, context);
     return shapes;
   }
@@ -43,9 +48,9 @@ export class VideoPosterRenderer extends ImageNodeRenderer {
     return this.options.renderPreviewPoster === true || getVideoFields(node)?.displayMode !== 'preview';
   }
 
-  private updateVisibility(shapes: LeaferShape[], node: NodeEntity, { theme }: LeaferRenderContext): void {
+  private updateVisibility(shapes: LeaferShape[], node: NodeEntity, { theme, textEditing }: LeaferRenderContext): void {
     const showPoster = this.showsPoster(node);
-    // 原位预览由 video 提供封面，画布保留节点底色和描边。
+    // 原位预览由 video 提供封面，画布保留节点底色、描边与顶部标题。
     for (const index of [1, 2, 4]) shapes[index].visible = showPoster;
     const r = videoCardPlayRadius(node);
     const x = node.width / 2;
@@ -57,5 +62,19 @@ export class VideoPosterRenderer extends ImageNodeRenderer {
       fill: theme.textColor,
       visible
     });
+    const definition = this.engine.nodeTypes.get(node.nodeType);
+    const labels = applyThemeToPrimitives(
+      (definition?.compose?.(node, { theme }) ?? [])
+        .filter((primitive) => primitive.kind === 'text')
+        .map((primitive) => {
+          if (textEditing?.kind !== 'node' || textEditing.id !== node.id || textEditing.blockId !== primitive.id)
+            return primitive;
+          const title = definition?.composeTextBlock?.(node, { theme }, textEditing.blockId);
+          return editingTextPrimitive(title ?? primitive, textEditing);
+        }),
+      theme
+    );
+    const labelGroup = shapes[7] as Group;
+    this.mapper.reconcile(labelGroup, labelGroup.children as LeaferShape[], labels);
   }
 }

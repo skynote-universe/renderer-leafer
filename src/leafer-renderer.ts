@@ -148,9 +148,7 @@ export class LeaferRenderer implements CanvasRenderer {
       options?.imageFailure,
       (id) => engine.entityStore.getNode(id)?.entity
     );
-    const videoPosters = new VideoPosterRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets, {
-      getNode: (id) => engine.entityStore.getNode(id)?.entity
-    });
+    const videoPosters = new VideoPosterRenderer(engine, mapper);
     this.assetRenderers = [
       this.images,
       videoPosters,

@@ -79,7 +79,7 @@ export class ContentPreviews {
     return (
       session.tool === 'select' &&
       !session.inMaintenance &&
-      session.selectedNodeIds.has(id) &&
+      (session.isReadOnly || session.selectedNodeIds.has(id)) &&
       entry?.instance.element.hidden === false &&
       entry.instance.canInteract
     );
@@ -104,7 +104,8 @@ export class ContentPreviews {
   private blur(id: string, restoreFocus = false): void {
     if (this.focusedId !== id) return;
     this.focusedId = undefined;
-    this.previews.get(id)?.instance.setInteractive(false, this.canFocus(id));
+    const showHint = !this.engine.session.isReadOnly && this.canFocus(id);
+    this.previews.get(id)?.instance.setInteractive(false, showHint);
     if (restoreFocus) this.container.focus({ preventScroll: true });
   }
 
@@ -176,7 +177,9 @@ export class ContentPreviews {
       entry.instance.element.hidden = false;
       entry.instance.position(this.engine, node, outline);
       const canFocus = !isInteracting && this.canFocus(id);
-      entry.instance.setInteractive(canFocus && this.focusedId === id, canFocus && this.focusedId !== id);
+      const interactive = canFocus && this.focusedId === id;
+      // 只读模式下不常驻显示居中提示胶囊，避免遮挡阅读，配合 shield 的 pointer 光标支持单击直接进入交互
+      entry.instance.setInteractive(interactive, !session.isReadOnly && canFocus && !interactive);
       shown.add(id);
       visible.push(node);
     }
