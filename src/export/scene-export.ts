@@ -7,6 +7,8 @@ import { PrimitiveMapper } from '../primitives/primitive-mapper';
 import { LeaferFontMeasurer } from '../text/leafer-font-measurer';
 import { LeaferNodeRendererRegistry } from '../registry/leafer-node-renderer-registry';
 import { ImageNodeRenderer } from '../node/image-node-renderer';
+import { VideoPosterRenderer } from '../node/video-poster-renderer';
+import { WebLinkCoverRenderer } from '../node/web-link-cover-renderer';
 import type { LeaferNodeRendererRegistry as SourceRegistry } from '../registry/leafer-node-renderer-registry';
 
 const MIME_TYPES = new Map<string, string>([
@@ -51,7 +53,7 @@ export async function exportScene(
   engine: SkyNoteEngine,
   source: SourceRegistry,
   request: CanvasExportRequest,
-  builtinImages?: ImageNodeRenderer
+  builtinAssets: readonly ImageNodeRenderer[] = []
 ): Promise<CanvasExportResult> {
   const { bounds, scale, signal } = request;
   signal.throwIfAborted();
@@ -80,7 +82,7 @@ export async function exportScene(
   for (const id of nodeIds) {
     const type = engine.entityStore.getNode(id)!.entity.nodeType;
     const renderer = source.get(type);
-    if (renderer && (type !== 'image' || renderer !== builtinImages))
+    if (renderer && !builtinAssets.some((builtin) => renderer === builtin))
       throw new Error(`节点类型${type}暂不支持独立图片导出`);
   }
   const connectorIds = engine.connectorSpatialIndex.search(bounds);
@@ -98,8 +100,13 @@ export async function exportScene(
   leafer.add(content);
   const registry = new LeaferNodeRendererRegistry();
   const images = new ImageNodeRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets);
-  registry.register(images);
+  const posters = new VideoPosterRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets, {
+    renderPreviewPoster: true
+  });
   const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
+  const webCovers = new WebLinkCoverRenderer(engine, mapper);
+  const assetRenderers = [images, posters, webCovers];
+  for (const renderer of assetRenderers) registry.register(renderer);
   const nodes = new NodeLayer({ engine, contentLayer: content, renderers: registry, mapper, offscreenCacheLimit: 0 });
   const connectors = new ConnectorLayer({ engine, mapper, offscreenCacheLimit: 0 });
   try {
@@ -131,7 +138,7 @@ export async function exportScene(
     // 图片URL解析/预加载和Leafer实际纹理加载都完成后再编码；取消/超时及时释放离屏资源。
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => finish(new Error('图片加载超时，请稍后重试')), 30_000);
-      let stopImages = () => {};
+      const unsubscribe: (() => void)[] = [];
       let waiting = false;
       let settled = false;
       const abort = () => finish(signal.reason ?? new Error('已取消导出'));
@@ -139,7 +146,7 @@ export async function exportScene(
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        stopImages();
+        for (const stop of unsubscribe) stop();
         signal.removeEventListener('abort', abort);
         if (error) reject(error);
         else resolve();
@@ -152,7 +159,7 @@ export async function exportScene(
             finish(new Error('存在无法加载的图片，请修复后再导出'));
             return;
           }
-          if (state?.status === 'loading') loading = true;
+          if (assetRenderers.some((renderer) => renderer.getState(id)?.status === 'loading')) loading = true;
         }
         if (loading) return;
         if (!waiting) {
@@ -161,7 +168,7 @@ export async function exportScene(
           leafer.waitViewCompleted(() => finish());
         }
       };
-      stopImages = images.subscribe(check);
+      for (const renderer of assetRenderers) unsubscribe.push(renderer.subscribe(check));
       signal.addEventListener('abort', abort, { once: true });
       if (signal.aborted) abort();
       else check();
@@ -198,7 +205,7 @@ export async function exportScene(
   } finally {
     connectors.destroyAll();
     nodes.destroyAll();
-    images.dispose();
+    for (const renderer of assetRenderers) renderer.dispose();
     registry.clear();
     leafer.destroy();
     canvas.width = canvas.height = 0;

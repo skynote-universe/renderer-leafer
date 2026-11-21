@@ -47,11 +47,22 @@ export interface ImageFailureAppearance {
   release?(url: string): void;
 }
 
+export type VideoControlsMount = (container: HTMLElement, video: HTMLVideoElement, signal: AbortSignal) => () => void;
+
+export interface ContentPreviewOptions {
+  /** 替换视频控件，媒体元素与预览生命周期仍由渲染器管理。 */
+  mountVideoControls?: VideoControlsMount;
+  /** 宿主显式启用从文档链接加载隔离网页预览。 */
+  enableWebLinkPreviews?: boolean;
+}
+
 export interface LeaferRendererOptions {
   /** 自适应细节规则，false 关闭 LOD。 */
   lod?: LeaferLodOptions | false;
   /** 宿主提供的失败展示资源；不登记为文档资产，失败时退回内置文字。 */
   imageFailure?: ImageFailureAppearance;
+  /** 内置 DOM 原位预览层配置（视频自定义控件、网页隔离预览授权）。 */
+  previews?: ContentPreviewOptions;
   /** 固定的设备像素比；缺省时跟随 window.devicePixelRatio 及其变化 (浏览器缩放、换屏) */
   pixelRatio?: number;
   /** 分帧调度 (默认开启) */

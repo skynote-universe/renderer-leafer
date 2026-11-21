@@ -13,7 +13,14 @@
 
 import { Leafer, Group } from 'leafer-ui';
 import type { CanvasRenderer, SkyNoteEngine, CanvasExportRequest, CanvasExportResult, RectBounds } from '@skynote/core';
-import { computeViewportWorldBounds, doBoundsIntersect, expandBounds } from '@skynote/core';
+import {
+  applyMatrix,
+  computeViewportWorldBounds,
+  doBoundsIntersect,
+  expandBounds,
+  invertMatrix,
+  type Point
+} from '@skynote/core';
 import type { LeaferRendererOptions, LeaferRenderContext } from './types';
 import { LeaferOverlay } from './overlay/leafer-overlay';
 import { PrimitiveMapper } from './primitives/primitive-mapper';
@@ -27,9 +34,15 @@ import { NodeLayer } from './layers/node-layer';
 import { ConnectorLayer } from './layers/connector-layer';
 import { ContentOrderSync } from './layers/content-order-sync';
 import { ImageNodeRenderer } from './node/image-node-renderer';
+import { VideoPosterRenderer } from './node/video-poster-renderer';
+import { WebLinkCoverRenderer } from './node/web-link-cover-renderer';
+import { ContentPreviews } from './overlay/content-previews';
+import { readWebLink } from './overlay/web-link-preview';
+import { getVideoAsset, getVideoFields, videoCardPlayRadius } from './node/video-fields';
 import { exportScene, LEAFER_EXPORT_FORMATS } from './export/scene-export';
 
 const OVERLAY_ESCAPE_SCOPE_ID = 'renderer:overlay-escape';
+const CONTENT_PREVIEW_SCOPE_ID = 'renderer:content-preview';
 const DEFAULT_OFFSCREEN_CACHE_LIMIT = 2000;
 /** 视锥缓冲边距：覆盖描边、箭头与路由外扩，避免边缘实体进出视野时闪烁 */
 const FRUSTUM_PADDING = 100;
@@ -40,13 +53,25 @@ export class LeaferRenderer implements CanvasRenderer {
   readonly backgroundLayer = new Group();
   /** 节点与连线按层级排列所在的内容层 */
   readonly contentLayer = new Group();
+  /** 顶层覆盖层 (选中框、控制柄、框选与参考线)，位于 DOM 预览层之上 */
+  readonly overlayLayer = new Group();
   readonly images: ImageNodeRenderer;
   readonly exportFormats = LEAFER_EXPORT_FORMATS;
 
   private readonly leafer: Leafer;
+  private readonly overlayLeafer: Leafer;
+  private readonly overlayHost: HTMLDivElement;
+  private readonly previousContainerPosition?: string;
+  private readonly previousContainerIsolation?: string;
   /** 承载视口变换的场景根 */
   private readonly scene = new Group();
+  /** 顶层覆盖层场景根 */
+  private readonly overlayScene = new Group();
   private readonly overlay: LeaferOverlay;
+  private readonly assetRenderers: readonly ImageNodeRenderer[];
+  private contentPreviews?: ContentPreviews;
+  private readonly previewIds = new Set<string>();
+  private viewportTransformPending = false;
   private readonly bridge: DOMHostBridge;
   private readonly nodeLayer: NodeLayer;
   private readonly connectorLayer: ConnectorLayer;
@@ -73,28 +98,64 @@ export class LeaferRenderer implements CanvasRenderer {
 
   constructor(
     readonly engine: SkyNoteEngine,
-    container: HTMLElement,
-    options?: LeaferRendererOptions
+    private readonly container: HTMLElement,
+    private readonly options?: LeaferRendererOptions
   ) {
     const { session } = engine;
     const offscreenCacheLimit = Math.max(0, options?.offscreenCacheLimit ?? DEFAULT_OFFSCREEN_CACHE_LIMIT);
     this.frameScheduler = new FrameCommitScheduler({ enabled: options?.enableFrameScheduler !== false });
     this.lodController = options?.lod === false ? undefined : new AdaptiveLodController(options?.lod);
 
-    // 场景树分层：背景层 → 内容层 → 覆盖层
+    // 场景树三层结构：底层内容 Canvas (背景层 + 内容层) → 中间 DOM 原位预览层 (zIndex: 1) → 顶层透明覆盖层 Canvas (zIndex: 2)
+    const pixelRatio = options?.pixelRatio ?? window.devicePixelRatio;
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    const doc = container.ownerDocument;
+    const computedStyle = doc.defaultView?.getComputedStyle(container);
+    if (computedStyle?.position === 'static') {
+      this.previousContainerPosition = container.style.position;
+      container.style.position = 'relative';
+    }
+    // 建立独立层叠上下文，防止内部预览层 (zIndex: 1) 与顶层覆盖层 (zIndex: 2) 越界遮挡宿主工具栏
+    if (computedStyle?.isolation !== 'isolate') {
+      this.previousContainerIsolation = container.style.isolation;
+      container.style.isolation = 'isolate';
+    }
     this.leafer = new Leafer({
       view: container,
-      width: container.clientWidth,
-      height: container.clientHeight,
-      pixelRatio: options?.pixelRatio ?? window.devicePixelRatio,
+      width,
+      height,
+      pixelRatio,
       pixelSnap: true,
       fill: session.theme.background
     });
-    const overlayLayer = new Group();
-    this.scene.add([this.backgroundLayer, this.contentLayer, overlayLayer]);
+    this.scene.add([this.backgroundLayer, this.contentLayer]);
     this.leafer.add(this.scene);
+
+    this.overlayHost = doc.createElement('div');
+    this.overlayHost.className = 'skynote-overlay-layer';
+    Object.assign(this.overlayHost.style, {
+      position: 'absolute',
+      inset: '0',
+      zIndex: '2',
+      pointerEvents: 'none',
+      overflow: 'hidden'
+    });
+    container.appendChild(this.overlayHost);
+    this.overlayLeafer = new Leafer({
+      view: this.overlayHost,
+      width,
+      height,
+      pixelRatio,
+      pixelSnap: true,
+      // 必须关闭 hittable，否则 Leafer 会给内部 canvas 写入 pointer-events: auto 拦截下层 DOM 预览点击
+      hittable: false
+    });
+    if (this.overlayLeafer.canvas?.view) this.overlayLeafer.canvas.view.style.pointerEvents = 'none';
+    this.overlayScene.add(this.overlayLayer);
+    this.overlayLeafer.add(this.overlayScene);
     this.applyViewportTransform();
-    session.setViewportSize({ width: container.clientWidth, height: container.clientHeight });
+    session.setViewportSize({ width, height });
 
     // 绘制文字必须用 Leafer 自己的测量 (与画出的字形一致)，不借用引擎上可能被替换的测量器
     const mapper = new PrimitiveMapper(new LeaferFontMeasurer());
@@ -107,8 +168,17 @@ export class LeaferRenderer implements CanvasRenderer {
       options?.imageFailure,
       (id) => engine.entityStore.getNode(id)?.entity
     );
-    this.nodeRenderers.register(this.images);
-    this.overlay = new LeaferOverlay(overlayLayer, mapper, () => session.theme);
+    const videoPosters = new VideoPosterRenderer((id) => engine.documentStore.getView().assets?.[id], engine.assets, {
+      getNode: (id) => engine.entityStore.getNode(id)?.entity
+    });
+    this.assetRenderers = [
+      this.images,
+      videoPosters,
+      new WebLinkCoverRenderer(engine, mapper, options?.previews?.enableWebLinkPreviews)
+    ];
+    for (const renderer of this.assetRenderers) this.nodeRenderers.register(renderer);
+    this.indexContentPreviews();
+    this.overlay = new LeaferOverlay(this.overlayLayer, mapper, () => session.theme);
     this.nodeLayer = new NodeLayer({
       contentLayer: this.contentLayer,
       engine,
@@ -124,6 +194,17 @@ export class LeaferRenderer implements CanvasRenderer {
       overlay: this.overlay,
       requestFrame: () => this.requestRender(),
       flushRender: () => this.renderFrame(),
+      resolveTapTarget: (point, previewId) => {
+        if (previewId) return this.contentPreviews?.canFocus(previewId) ? previewId : undefined;
+        return this.mediaCardAt(point);
+      },
+      onTap: (id, previewId) => {
+        if (previewId) this.contentPreviews?.focus(id);
+        else {
+          const node = engine.entityStore.getNode(id)?.entity;
+          if (node) engine.events.emit('node:activate', { nodeId: id, nodeType: node.nodeType, trigger: 'pointer' });
+        }
+      },
       onInteractionChange: (isInteracting) => {
         this.isInteracting = isInteracting;
       }
@@ -135,12 +216,20 @@ export class LeaferRenderer implements CanvasRenderer {
       // 文档增量变更：登记待销毁实体与层级脏标记，合并到下一帧
       engine.documentStore.subscribe((_view, _record, changes) => {
         this.nodeLayer.recordChanges(changes);
-        if (changes.contentReplaced) this.nodeLayer.destroyAll();
-        else {
-          this.images.reconcile(changes.nodes.removed);
-          this.images.reconcile(changes.nodes.data);
-          // 仅在资产发生变化时遍历已持有的图片，正常几何帧不增加这项开销。
-          if (changes.assets.size) this.images.reconcileAssets(changes.assets);
+        if (changes.contentReplaced) {
+          this.contentPreviews?.clear();
+          this.indexContentPreviews();
+          this.nodeLayer.destroyAll();
+        } else {
+          for (const id of changes.nodes.removed) this.previewIds.delete(id);
+          for (const id of changes.nodes.added) this.indexPreview(id);
+          for (const id of changes.nodes.data) this.indexPreview(id);
+          for (const renderer of this.assetRenderers) {
+            renderer.reconcile(changes.nodes.removed);
+            renderer.reconcile(changes.nodes.data);
+            if (changes.assets.size) renderer.reconcileAssets(changes.assets);
+          }
+          this.contentPreviews?.reconcilePlayback(changes);
         }
         this.nodeLayer.invalidateAssets(changes.assets);
         for (const id of changes.nodes.removed) this.pendingRemovedNodeIds.add(id);
@@ -157,9 +246,15 @@ export class LeaferRenderer implements CanvasRenderer {
       engine.layouts.onChange(() => this.requestRender()),
       // 视口变换立即生效 (平移缩放零延迟跟手)，视锥、选中态与主题重绘合并到下一帧；进入维护冻结时清除瞬态预览
       session.subscribe((change) => {
-        if (change.viewportChanged) this.applyViewportTransform();
+        if (change.viewportChanged) {
+          if (this.contentPreviews?.hasVisiblePreview) this.viewportTransformPending = true;
+          else this.applyViewportTransform();
+        }
         if (change.themeChanged) this.leafer.fill = session.theme.background;
-        if (change.maintenanceChanged && session.inMaintenance) this.overlay.clearTransient();
+        if (change.maintenanceChanged && session.inMaintenance) {
+          this.overlay.clearTransient();
+          this.contentPreviews?.clear();
+        }
         this.requestRender();
       })
     );
@@ -167,6 +262,24 @@ export class LeaferRenderer implements CanvasRenderer {
     // 失焦与 Esc 兜底清空瞬态图元：Esc 经焦点栈以最低优先级消费，上层交互 (如取消拖拽) 先行处理
     const clearTransient = () => this.overlay.clearTransient();
     window.addEventListener('blur', clearTransient);
+    engine.inputScopes.pushScope({
+      id: CONTENT_PREVIEW_SCOPE_ID,
+      priority: 90,
+      onKeyDown: (event) => {
+        if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey || !this.contentPreviews) return;
+        if (event.key === 'Escape' && this.contentPreviews.exitFocus()) {
+          event.preventDefault();
+          return true;
+        }
+        if (event.key !== 'Enter' || this.isInteracting || session.textEditing || session.selectedNodeIds.size !== 1)
+          return;
+        const id = session.selectedNodeIds.values().next().value;
+        if (id !== undefined && this.contentPreviews.focus(id)) {
+          event.preventDefault();
+          return true;
+        }
+      }
+    });
     engine.inputScopes.pushScope({
       id: OVERLAY_ESCAPE_SCOPE_ID,
       priority: -100,
@@ -176,6 +289,7 @@ export class LeaferRenderer implements CanvasRenderer {
     });
     this.disposers.push(
       () => window.removeEventListener('blur', clearTransient),
+      () => engine.inputScopes.popScope(CONTENT_PREVIEW_SCOPE_ID),
       () => engine.inputScopes.popScope(OVERLAY_ESCAPE_SCOPE_ID)
     );
 
@@ -184,6 +298,7 @@ export class LeaferRenderer implements CanvasRenderer {
       const height = Math.floor(entry.contentRect.height);
       if (width <= 0 || height <= 0) return;
       this.leafer.resize({ width, height });
+      this.overlayLeafer.resize({ width, height });
       session.setViewportSize({ width, height });
     });
     this.resizeObserver.observe(container);
@@ -193,11 +308,13 @@ export class LeaferRenderer implements CanvasRenderer {
     if (options?.pixelRatio === undefined) {
       let query: MediaQueryList;
       const onPixelRatioChange = (): void => {
-        this.leafer.resize({
+        const size = {
           width: container.clientWidth,
           height: container.clientHeight,
           pixelRatio: window.devicePixelRatio
-        });
+        };
+        this.leafer.resize(size);
+        this.overlayLeafer.resize(size);
         watchPixelRatio();
       };
       const watchPixelRatio = (): void => {
@@ -219,7 +336,7 @@ export class LeaferRenderer implements CanvasRenderer {
   /** 隔离导出不复用交互场景，格式由当前渲染器声明并处理。 */
   async export(request: CanvasExportRequest): Promise<CanvasExportResult> {
     if (this.isDestroyed) throw new Error('渲染器已销毁');
-    return exportScene(this.engine, this.nodeRenderers, request, this.images);
+    return exportScene(this.engine, this.nodeRenderers, request, this.assetRenderers);
   }
 
   /** 申请在下一动画帧渲染：同一帧内的多次提交 (拖拽、滚轮连发) 只渲染一次 */
@@ -254,6 +371,7 @@ export class LeaferRenderer implements CanvasRenderer {
     const frameStart = performance.now();
     const { engine, nodeLayer, connectorLayer } = this;
     const { entityStore, session } = engine;
+    if (this.viewportTransformPending) this.applyViewportTransform();
 
     if (this.pendingRemovedNodeIds.size) nodeLayer.destroyMany(this.pendingRemovedNodeIds);
     this.pendingRemovedNodeIds.clear();
@@ -338,6 +456,20 @@ export class LeaferRenderer implements CanvasRenderer {
       this.layerOrderInvalidated = false;
     }
 
+    if (this.previewIds.size || this.contentPreviews?.hasVisiblePreview) {
+      const previewIds = visibleNodeIds.filter((id) => this.previewIds.has(id) && frame.committedNodeIds.has(id));
+      if (previewIds.length || this.contentPreviews?.hasVisiblePreview) {
+        // 提交这帧的 Leafer 局部绘制后再更新 DOM，避免两套调度各自采用不同版本的坐标。
+        if (this.leafer.renderer.changed) this.leafer.renderer.render();
+        if (this.overlayLeafer.renderer.changed) this.overlayLeafer.renderer.render();
+        this.contentPreviews ??= new ContentPreviews(engine, this.container, this.options?.previews, () =>
+          this.requestRender()
+        );
+      }
+      this.contentPreviews?.updateViewport();
+      this.contentPreviews?.sync(previewIds, this.isInteracting);
+    } else this.contentPreviews?.clear();
+
     this.lodController?.recordFrame(performance.now() - frameStart, frameStart);
     // 分帧队列未清空时继续调度
     if (frame.state.active) this.requestRender();
@@ -352,17 +484,59 @@ export class LeaferRenderer implements CanvasRenderer {
     this.resizeObserver.disconnect();
     for (const dispose of this.disposers) dispose();
     this.bridge.destroy();
+    this.contentPreviews?.destroy();
     this.overlay.destroy();
     this.nodeLayer.destroyAll();
-    this.images.dispose();
+    for (const renderer of this.assetRenderers) renderer.dispose();
     this.connectorLayer.destroyAll();
     this.nodeRenderers.clear();
+    this.overlayLeafer.destroy();
+    if (this.overlayHost.parentNode) this.overlayHost.parentNode.removeChild(this.overlayHost);
+    else this.overlayHost.remove?.();
     this.leafer.destroy();
+    if (this.previousContainerPosition !== undefined && this.container.style.position === 'relative')
+      this.container.style.position = this.previousContainerPosition;
+    if (this.previousContainerIsolation !== undefined && this.container.style.isolation === 'isolate')
+      this.container.style.isolation = this.previousContainerIsolation;
   }
 
   private applyViewportTransform(): void {
     const { x, y, zoom } = this.engine.session.viewport;
     this.scene.set({ x, y, scaleX: zoom, scaleY: zoom });
+    this.overlayScene.set({ x, y, scaleX: zoom, scaleY: zoom });
+    this.viewportTransformPending = false;
+  }
+
+  private indexPreview(id: string): void {
+    const node = this.engine.entityStore.getNode(id)?.entity;
+    const web = this.options?.previews?.enableWebLinkPreviews && readWebLink(node)?.preview;
+    const video = this.engine.assets && node?.nodeType === 'video' && getVideoFields(node)?.displayMode === 'preview';
+    if (web || video) this.previewIds.add(id);
+    else this.previewIds.delete(id);
+  }
+
+  private indexContentPreviews(): void {
+    this.previewIds.clear();
+    const { nodes } = this.engine.documentStore.getView().content;
+    for (const id in nodes) this.indexPreview(id);
+  }
+
+  private mediaCardAt(point: Point): string | undefined {
+    const { engine } = this;
+    if (engine.session.tool !== 'select' || engine.session.inMaintenance) return;
+    const hit = engine.hitTest(point);
+    if (hit?.kind !== 'node') return;
+    const { node } = hit;
+    const link = readWebLink(node);
+    const isVideoCard = getVideoFields(node)?.displayMode !== 'preview' && getVideoAsset(engine, node);
+    if (link?.preview || (!link && !isVideoCard)) return;
+    const matrix = engine.entityStore.getWorldTransform(node.id);
+    if (!matrix) return;
+    const local = applyMatrix(invertMatrix(matrix), point.x, point.y);
+    const inside = link
+      ? local.x >= 0 && local.x <= node.width && local.y >= 0 && local.y <= node.height
+      : Math.hypot(local.x - node.width / 2, local.y - node.height / 2) <= videoCardPlayRadius(node);
+    return inside ? node.id : undefined;
   }
 
   private hasViewportNodesAbove(candidates: readonly string[], viewport: RectBounds, limit: number): boolean {

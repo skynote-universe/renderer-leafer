@@ -20,9 +20,7 @@ interface ImageNodeState {
   preloader?: HTMLImageElement;
 }
 
-type ImageNodeEntity = Omit<NodeEntity, 'image'> & {
-  image?: { assetId?: string; fit?: 'fill' | 'cover' | 'contain' | 'none' };
-};
+type ImageFields = { assetId?: string; fit?: 'fill' | 'cover' | 'contain' | 'none' };
 
 const IMAGE_FITS = ['fill', 'cover', 'contain', 'none'] as const;
 
@@ -34,7 +32,7 @@ interface FailureState {
 }
 
 export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoadingController {
-  readonly nodeType = 'image';
+  readonly nodeType: string = 'image';
   private readonly states = new Map<Rect, ImageNodeState>();
   private readonly failures = new Map<Rect, FailureState>();
   private readonly views = new Map<
@@ -51,6 +49,14 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoad
     private readonly failureAppearance?: ImageFailureAppearance,
     private readonly getNode?: (nodeId: string) => NodeEntity | undefined
   ) {}
+
+  protected getImage(node: NodeEntity): ImageFields | undefined {
+    return (node as NodeEntity & { image?: ImageFields }).image;
+  }
+
+  protected get emptyLabel(): string {
+    return '图片资产缺失';
+  }
 
   getState(nodeId: string): ImageLoadState | undefined {
     return this.loadStates.get(nodeId);
@@ -72,7 +78,7 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoad
       const view = this.views.get(id);
       if (!view || this.loadStates.get(id)?.status !== 'failed') continue;
       const node = this.getNode ? this.getNode(id) : view.node;
-      if (!node || node.nodeType !== 'image') continue;
+      if (!node || node.nodeType !== this.nodeType) continue;
       view.node = node;
       this.load(node, view.shapes[1] as Rect, view.shapes[2] as Rect, view.shapes[4] as Text);
       started.push(id);
@@ -87,7 +93,7 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoad
       const view = this.views.get(id);
       if (!view) continue;
       const node = this.getNode(id);
-      if (!node || node.nodeType !== 'image') this.destroy(view.shapes);
+      if (!node || node.nodeType !== this.nodeType) this.destroy(view.shapes);
       else this.refresh(view.shapes, node);
     }
   }
@@ -153,9 +159,10 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoad
     const placeholder = shapes[1] as Rect;
     const image = shapes[2] as Rect;
     const status = shapes[4] as Text;
-    const assetId = (node as ImageNodeEntity).image?.assetId;
+    const fields = this.getImage(node);
+    const assetId = fields?.assetId;
     const src = assetId ? this.getAsset(assetId)?.src : undefined;
-    if (view?.assetId !== assetId || view?.fit !== resolveFit(node as ImageNodeEntity) || view?.src !== src)
+    if (view?.assetId !== assetId || view?.fit !== resolveFit(fields) || view?.src !== src)
       this.load(node, placeholder, image, status);
   }
 
@@ -217,24 +224,24 @@ export class ImageNodeRenderer implements LeaferNodeLifecycleRenderer, ImageLoad
       this.states.delete(image);
     }
     image.set({ fill: undefined });
-    const imageNode = node as ImageNodeEntity;
-    const assetId = imageNode.image?.assetId;
+    const fields = this.getImage(node);
+    const assetId = fields?.assetId;
     const asset = assetId ? this.getAsset(assetId) : undefined;
     const view = this.views.get(node.id);
     if (view) {
       view.assetId = assetId;
       view.src = asset?.src;
-      view.fit = resolveFit(imageNode);
+      view.fit = resolveFit(fields);
     }
     if (!assetId || !asset || !this.assets) {
       image.set({ fill: undefined });
       const reason = !assetId || !asset ? 'missing-asset' : 'unavailable';
-      status.set({ text: reason === 'missing-asset' ? '图片资产缺失' : '图片加载不可用' });
+      status.set({ text: reason === 'missing-asset' ? this.emptyLabel : '图片加载不可用' });
       this.showFailure(node, reason, placeholder, image, status);
       return;
     }
     const controller = new AbortController();
-    const fit = resolveFit(imageNode);
+    const fit = resolveFit(fields);
     const state: ImageNodeState = { src: asset.src, controller };
     this.states.set(image, state);
     image.set({ cornerRadius: node.style?.radius, opacity: node.style?.opacity ?? 1 });
@@ -361,7 +368,7 @@ function resolveImageFill(fill: NodeFill | undefined, context: LeaferRenderConte
   return resolveThemeColor(color, context.theme, context.theme.nodeFill);
 }
 
-function resolveFit(node: ImageNodeEntity): (typeof IMAGE_FITS)[number] {
-  const fit = node.image?.fit;
+function resolveFit(fields: ImageFields | undefined): (typeof IMAGE_FITS)[number] {
+  const fit = fields?.fit;
   return fit && IMAGE_FITS.includes(fit) ? fit : 'cover';
 }

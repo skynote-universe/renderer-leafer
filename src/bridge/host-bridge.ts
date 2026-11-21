@@ -32,6 +32,7 @@ import type {
 } from '@skynote/core';
 import { ClickCounter, SyntheticPointerEvent, SyntheticWheelEvent, clamp, screenToWorld } from '@skynote/core';
 import { DOMTextInput, TEXT_INPUT_ATTRIBUTE } from './dom-text-input';
+import { PREVIEW_CONTENT_ATTRIBUTE, PREVIEW_TARGET_ATTRIBUTE } from '../overlay/preview-frame';
 
 /** 事件是否来自原生可编辑元素 (这些按键属于文本输入，不是画布快捷键)；画布自己的隐藏输入通道除外 */
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -160,6 +161,8 @@ export interface HostBridgeOptions {
   requestFrame: () => void;
   /** 立即冲刷并同步渲染当前帧 (如指针抬起提交实体后避免空帧闪烁) */
   flushRender?: () => void;
+  resolveTapTarget?: (point: Point, previewId?: string) => string | undefined;
+  onTap?: (targetId: string, previewId?: string) => void;
   /** 指针按下 / 抬起时通知 (渲染器据此调整 LOD) */
   onInteractionChange: (isInteracting: boolean) => void;
 }
@@ -170,6 +173,15 @@ export class DOMHostBridge implements CanvasHost {
   private readonly engine: SkyNoteEngine;
   private readonly requestFrame: () => void;
   private readonly flushRender?: () => void;
+  private readonly resolveTapTarget?: HostBridgeOptions['resolveTapTarget'];
+  private readonly onTap?: HostBridgeOptions['onTap'];
+  private tap?: {
+    readonly pointerId: number;
+    readonly x: number;
+    readonly y: number;
+    readonly id: string;
+    readonly previewId?: string;
+  };
   private readonly onInteractionChange: (isInteracting: boolean) => void;
   private readonly abortController = new AbortController();
   private pendingMoves = new Map<number, PendingPointerMove>();
@@ -193,6 +205,8 @@ export class DOMHostBridge implements CanvasHost {
     this.engine = options.engine;
     this.requestFrame = options.requestFrame;
     this.flushRender = options.flushRender;
+    this.resolveTapTarget = options.resolveTapTarget;
+    this.onTap = options.onTap;
     this.onInteractionChange = options.onInteractionChange;
     this.bindDomEvents();
     this.unsubscribeCursors = this.engine.cursors.subscribe(() => {
@@ -334,6 +348,12 @@ export class DOMHostBridge implements CanvasHost {
         };
       });
     }
+    const previewId =
+      e.type === 'pointerdown'
+        ? (e.target as Element | null)
+            ?.closest?.(`[${PREVIEW_TARGET_ATTRIBUTE}]`)
+            ?.getAttribute(PREVIEW_TARGET_ATTRIBUTE)
+        : undefined;
     return new SyntheticPointerEvent({
       point,
       clientPoint,
@@ -345,7 +365,9 @@ export class DOMHostBridge implements CanvasHost {
       samples,
       clickCount: this.clickCount,
       // 命中拾取延迟到首次读取 target (多数移动监听者不读)
-      resolveTarget: () => this.engine.hitTestNode(point),
+      overlayTarget: !!previewId,
+      resolveTarget: () =>
+        previewId ? this.engine.entityStore.getNode(previewId)?.entity : this.engine.hitTestNode(point),
       onStopPropagation: () => e.stopPropagation()
     });
   }
@@ -370,12 +392,27 @@ export class DOMHostBridge implements CanvasHost {
     const rect = this.getContainerRect();
     this.clickCount = this.clicks.press({ x: e.clientX - rect.left, y: e.clientY - rect.top }, e.button, e.timeStamp);
     const canvasEvent = this.toCanvasPointerEvent(e);
+    this.tap = undefined;
+    if (
+      this.resolveTapTarget &&
+      e.button === 0 &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.shiftKey &&
+      !this.textInput
+    ) {
+      const previewId = canvasEvent.overlayTarget ? canvasEvent.target?.id : undefined;
+      const id = this.resolveTapTarget(canvasEvent.point, previewId);
+      if (id) this.tap = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, id, previewId };
+    }
     this.engine.pointer.dispatchPointerDown(canvasEvent);
     // 文字编辑中 (含本次按下刚进入编辑)：焦点须留在输入通道，阻止默认行为使随后的兼容 mousedown 不把焦点抢回容器
     if (this.textInput) e.preventDefault();
   };
 
   private handlePointerMove = (e: PointerEvent): void => {
+    this.cancelMovedTap(e);
     const pointerType = resolvePointerType(e.pointerType);
     // getCoalescedEvents 必须在原生事件回调同步栈内读取，浏览器在事件返回后会清空合并队列
     const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : null;
@@ -403,20 +440,32 @@ export class DOMHostBridge implements CanvasHost {
   };
 
   private handlePointerUp = (e: PointerEvent): void => {
+    this.cancelMovedTap(e);
+    const tap = this.tap?.pointerId === e.pointerId ? this.tap : undefined;
+    if (tap) this.tap = undefined;
     this.flushPointerMove(e.pointerId);
     this.onInteractionChange(false);
     const canvasEvent = this.toCanvasPointerEvent(e);
     this.engine.pointer.dispatchPointerUp(canvasEvent);
     this.flushRender?.();
+    if (tap && this.resolveTapTarget?.(canvasEvent.point, tap.previewId) === tap.id)
+      this.onTap?.(tap.id, tap.previewId);
   };
 
+  private cancelMovedTap(e: PointerEvent): void {
+    const tap = this.tap;
+    if (tap?.pointerId === e.pointerId && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) >= 3) this.tap = undefined;
+  }
+
   private handlePointerCancel = (e: PointerEvent): void => {
+    if (this.tap?.pointerId === e.pointerId) this.tap = undefined;
     this.flushPointerMove(e.pointerId);
     this.onInteractionChange(false);
     this.engine.pointer.dispatchPointerCancel(this.toCanvasPointerEvent(e));
   };
 
   private handlePointerLeave = (e: PointerEvent): void => {
+    if (this.tap?.pointerId === e.pointerId) this.tap = undefined;
     this.flushPointerMove(e.pointerId);
     this.engine.pointer.dispatchPointerLeave(this.toCanvasPointerEvent(e));
   };
@@ -452,7 +501,12 @@ export class DOMHostBridge implements CanvasHost {
   private handleClipboard = (e: ClipboardEvent): void => {
     const active = this.container.ownerDocument.activeElement;
     if (e.defaultPrevented || !e.clipboardData || !this.container.contains(active)) return;
-    if (isEditableTarget(active) || active?.hasAttribute(TEXT_INPUT_ATTRIBUTE)) return;
+    if (
+      isEditableTarget(active) ||
+      active?.hasAttribute(TEXT_INPUT_ATTRIBUTE) ||
+      active?.closest?.(`[${PREVIEW_CONTENT_ATTRIBUTE}]`)
+    )
+      return;
     const { clipboard } = this.engine;
     if (e.type === 'paste') {
       const data: Record<string, string> = {};
@@ -480,6 +534,7 @@ export class DOMHostBridge implements CanvasHost {
   };
 
   private handleBlur = (): void => {
+    this.tap = undefined;
     this.pendingMoves.clear();
     this.pendingWheels.clear();
     this.engine.inputScopes.dispatchBlur();

@@ -19,11 +19,21 @@ describe('LeaferRenderer 场景树图层架构', () => {
     const backgroundLayer = renderer.backgroundLayer;
     const contentLayer = renderer.contentLayer;
 
-    // 验证场景树相对层级：backgroundLayer 必须在 contentLayer 之前添加 (最底)
+    // 验证场景树相对层级：backgroundLayer 必须在 contentLayer 之前添加 (最底)，overlayLayer 位于独立顶层透明覆盖层
     const sceneGroup = (backgroundLayer as any).parent;
     expect(sceneGroup).toBeDefined();
     expect(sceneGroup.children[0]).toBe(backgroundLayer);
     expect(sceneGroup.children[1]).toBe(contentLayer);
+    expect(renderer.overlayLayer.parent).not.toBe(sceneGroup);
+    const overlayHost = Array.from(container.children).find(
+      (child) => (child as HTMLElement).className === 'skynote-overlay-layer'
+    ) as HTMLElement | undefined;
+    expect(overlayHost).toBeDefined();
+    expect(overlayHost?.style.zIndex).toBe('2');
+    expect(overlayHost?.style.pointerEvents).toBe('none');
+    for (const child of Array.from(overlayHost?.children ?? [])) {
+      expect((child as HTMLElement).style.pointerEvents).toBe('none');
+    }
 
     renderer.destroy();
   });
@@ -69,7 +79,7 @@ describe('LeaferRenderer 场景树图层架构', () => {
     Object.defineProperty(container, 'clientHeight', { value: 800 });
     const renderer = new LeaferRenderer(engine, container);
 
-    const ephemeralGroup = renderer.contentLayer.parent!.children[2] as unknown as { children: unknown[] };
+    const ephemeralGroup = renderer.overlayLayer as unknown as { children: unknown[] };
     // 经引擎宿主写入 (与交互插件的路径一致)：框选为瞬态，选中框为持久
     engine.host.overlay.setPrimitives('marquee', [{ kind: 'rect', x: 0, y: 0, width: 10, height: 10 }], {
       transient: true
@@ -222,7 +232,7 @@ describe('LeaferAdapter', () => {
     expect(composeCalls).toBe(1);
 
     // 4. 进入 beginMaintenance 时立即清空瞬态覆盖层 (保留持久覆盖层)
-    const ephemeralGroup = renderer.contentLayer.parent!.children[2] as unknown as { children: unknown[] };
+    const ephemeralGroup = renderer.overlayLayer as unknown as { children: unknown[] };
     engine.host.overlay.setPrimitives('draft:ink', [{ kind: 'path', d: 'M 0 0 L 10 10' }], { transient: true });
     engine.host.overlay.setPrimitives('selection:outline', [{ kind: 'rect', x: 0, y: 0, width: 10, height: 10 }]);
     expect(ephemeralGroup.children.length).toBe(2);
