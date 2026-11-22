@@ -1,4 +1,4 @@
-import { getPlainText, parseWebUrl, type NodeEntity, type SkyNoteEngine } from '@skynote/core';
+import { getPlainText, parseWebUrl, type NodeEntity, type Point, type SkyNoteEngine } from '@skynote/core';
 import { PreviewFrame } from './preview-frame';
 import type { ContentPreviewInstance, ContentPreviewRenderer } from './preview-registry';
 
@@ -48,10 +48,12 @@ export class WebLinkPreview extends PreviewFrame implements ContentPreviewInstan
     this.frame.setAttribute('allow', "camera 'none'; microphone 'none'; geolocation 'none'; payment 'none'");
     this.frame.tabIndex = 0;
     Object.assign(this.frame.style, {
+      position: 'absolute',
+      top: '0',
+      left: '0',
       display: 'block',
       border: '0',
-      width: '100%',
-      height: '100%',
+      transformOrigin: '0 0',
       background: 'var(--sn-surface, Canvas)'
     });
 
@@ -113,6 +115,22 @@ export class WebLinkPreview extends PreviewFrame implements ContentPreviewInstan
   update(_engine: SkyNoteEngine, node: Readonly<NodeEntity>): void {
     const link = readWebLink(node);
     if (link) this.setTitle(link.title);
+  }
+
+  /**
+   * iframe 视口尺寸固定为节点的逻辑内框尺寸，画布缩放仅通过 CSS scale 变换呈现，
+   * 避免缩放画布时触发嵌入网页的响应式断点重排；调整节点自身宽高时再按新逻辑尺寸排版。
+   */
+  override position(engine: SkyNoteEngine, node: Readonly<NodeEntity>, outline: readonly Point[]): void {
+    super.position(engine, node, outline);
+    const { zoom } = engine.session.viewport;
+    const logicalWidth = Math.max(1, node.width - this.lastBorderLogical * 2);
+    const logicalHeight = Math.max(1, node.height - this.lastBorderLogical * 2);
+    const screenWidth = Math.max(1, node.width * zoom - this.lastInset * 2);
+    const screenHeight = Math.max(1, node.height * zoom - this.lastInset * 2);
+    this.frame.style.width = `${logicalWidth}px`;
+    this.frame.style.height = `${logicalHeight}px`;
+    this.frame.style.transform = `scale(${screenWidth / logicalWidth}, ${screenHeight / logicalHeight})`;
   }
 
   override setInteractive(interactive: boolean, showHint = false): void {

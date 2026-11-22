@@ -342,10 +342,17 @@ describe('网页链接预览', () => {
     expect(frame.referrerPolicy).toBe('no-referrer');
     expect(frame.title).toBe('测试网页');
     expect(frame.parentElement?.style.inset).toBe('2px');
+    expect(frame.style.width).toBe('96px');
+    expect(frame.style.height).toBe('76px');
+    expect(frame.style.transform).toBe('scale(1, 1)');
     engine.documentStore.updateNode(page, { style: { radius: [20, 8, 1, 100] } });
     engine.session.setViewport({ zoom: 1.5 });
     previews.sync([page, nodeId], false);
     expect(frame.parentElement?.style.inset).toBe('3px');
+    // 画布缩放时 iframe 保持逻辑宽高不变，通过 CSS scale 等比缩放，不触发内部网页重排
+    expect(frame.style.width).toBe('96px');
+    expect(frame.style.height).toBe('76px');
+    expect(frame.style.transform).toBe('scale(1.5, 1.5)');
     expect(frame.parentElement?.style.borderRadius).toBe('27px 9px 0px 57px');
     expect(overlay.querySelector<HTMLElement>(`[${PREVIEW_TARGET_ATTRIBUTE}]`)?.style.borderRadius).toBe(
       '27px 9px 0px 57px'

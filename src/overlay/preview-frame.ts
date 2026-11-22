@@ -24,6 +24,8 @@ export class PreviewFrame {
   protected readonly surface: HTMLDivElement;
   protected readonly content: HTMLDivElement;
   protected readonly shield: HTMLDivElement;
+  protected lastInset = 0;
+  protected lastBorderLogical = 0;
   private statusLayer?: HTMLDivElement;
 
   constructor(doc: Document, nodeId: string) {
@@ -68,12 +70,15 @@ export class PreviewFrame {
       stroke,
       strokeOpacity
     } = resolveNodeStyle(node, engine.nodeTypes.get(node.nodeType));
-    const border = stroke === 'transparent' || strokeOpacity === 0 ? 0 : strokeWidth * zoom;
+    const borderLogical = stroke === 'transparent' || strokeOpacity === 0 ? 0 : strokeWidth;
+    const border = borderLogical * zoom;
     const dpr = this.element.ownerDocument.defaultView?.devicePixelRatio || 1;
     // 向上对齐到物理像素，避免非整数缩放时 DOM 边缘吃掉底层 Canvas 描边的抗锯齿像素。
     const snappedBorder = border > 0 ? Math.ceil(border * dpr) / dpr : 0;
     const maxRadius = Math.min(width, height) / 2;
     const inset = Math.max(0, Math.min(snappedBorder, maxRadius - 0.5));
+    this.lastBorderLogical = borderLogical;
+    this.lastInset = inset;
     this.element.style.clipPath = `polygon(${outline.map((p) => `${p.x - x}px ${p.y - y}px`).join(', ')})`;
     this.surface.style.width = `${width}px`;
     this.surface.style.height = `${height}px`;
